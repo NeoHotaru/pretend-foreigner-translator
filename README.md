@@ -102,6 +102,8 @@ set PFT_MODEL_DIR=D:\somewhere\sherpa-onnx-sense-voice-...
 
 ## 界面
 
+![主界面](docs/main-window.png)
+
 **主窗口**（两栏并排，可拖分栏线）
 
 ```
