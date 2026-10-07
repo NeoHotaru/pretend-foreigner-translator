@@ -612,6 +612,18 @@ def test_setup():
 
     import translator_core as C
 
+    # 9.0 版本比较（纯函数，不联网）。比不出来的一律当"不是新版"。
+    cases = [("v1.0.1", "1.0.1", False), ("v1.0.2", "1.0.1", True),
+             ("v1.10", "1.9", True), ("v2.0", "v1.99", True),
+             ("", "1.0.1", False), ("garbage", "1.0.1", False)]
+    wrong = [(a, b, C.parse_version(a) > C.parse_version(b), want)
+             for a, b, want in cases
+             if (C.parse_version(a) > C.parse_version(b)) != want]
+    if not wrong and C.parse_version(C.APP_VERSION) == C.parse_version(C.APP_VERSION):
+        ok("版本比较", "APP_VERSION=%s，%d 个用例都对" % (C.APP_VERSION, len(cases)))
+    else:
+        bad("版本比较", wrong)
+
     # 9.1 代码里不许出现写死的私有路径。
     # 只看**字符串字面量**——注释里提到"D:\DeepSeekHarness"是在解释为什么不要写死它。
     import ast

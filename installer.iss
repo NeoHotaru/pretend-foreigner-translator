@@ -3,7 +3,7 @@
 
 #define AppName        "假装外国人翻译器"
 #define AppNameEn      "Pretend Foreigner Translator"
-#define AppVer         "1.0.1"
+#define AppVer         "1.0.2"
 #define AppPublisher   "NeoHotaru"
 #define AppURL         "https://github.com/NeoHotaru"
 #define SrcDir         "dist\pretend-foreigner"

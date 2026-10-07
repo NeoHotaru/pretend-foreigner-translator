@@ -53,6 +53,50 @@ KEY_ENV_VAR = "PFT_API_KEY"
 BUILTIN_BASE = "https://api.deepseek.com"
 BUILTIN_MODEL = "deepseek-chat"
 
+# 本程序版本。**改版本时这里和 installer.iss 的 AppVer 要一起改。**
+APP_VERSION = "1.0.2"
+REPO_SLUG = "NeoHotaru/pretend-foreigner-translator"
+
+
+def parse_version(s):
+    """把 "v1.2.3" / "1.2" 变成 (1, 2, 3) 这种元组，好比较。
+
+    认不出来的返回 (0,)，所以任何怪 version 都不会被当成"更新"。
+    """
+    out = []
+    for part in str(s or "").strip().lstrip("vV").split("."):
+        num = ""
+        for ch in part:
+            if ch.isdigit():
+                num += ch
+            else:
+                break
+        out.append(int(num) if num else 0)
+    return tuple(out) or (0,)
+
+
+def check_latest_release(timeout=6):
+    """问一次 GitHub 的最新 release。
+
+    返回 (有没有新版, 最新版本号, 下载页 URL)；任何失败都返回 (False, None, None)。
+    **这个函数不许影响启动** —— 所以超时短、异常全吞。
+    """
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            "https://api.github.com/repos/%s/releases/latest" % REPO_SLUG,
+            headers={"User-Agent": "pretend-foreigner/%s" % APP_VERSION,
+                     "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.load(r)
+        tag = (data.get("tag_name") or "").strip()
+        url = (data.get("html_url") or "").strip()
+        if not tag:
+            return False, None, None
+        return parse_version(tag) > parse_version(APP_VERSION), tag, url
+    except Exception:
+        return False, None, None
+
 # ───────────────────────── 语言 ─────────────────────────
 
 LANGS = [

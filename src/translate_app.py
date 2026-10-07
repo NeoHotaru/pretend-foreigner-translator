@@ -524,6 +524,11 @@ class SettingsDialog(tk.Toplevel):
     def toggle_show(self):
         self.e_key.configure(show="" if self.v_show.get() else "*")
 
+    # 设置里那个"启动时检查新版本"开关用的（前端重做时接上它）
+    def set_check_updates(self, on):
+        self.t.config["checkUpdates"] = bool(on)
+        self.t.save_config()
+
     def providers(self):
         return self.t.config.get("providers", [])
 
@@ -775,6 +780,23 @@ class App(tk.Tk):
             return
         self.refresh_backends()
         self.load_session_into_ui()
+
+        # 悄悄问一次有没有新版本。后台线程 + 短超时，失败什么也不做。
+        # 设 config["checkUpdates"]=false 可以关掉。
+        if self.t.config.get("checkUpdates", True):
+            threading.Thread(target=self._check_updates, daemon=True).start()
+
+    def _check_updates(self):
+        """只在新版真的存在时提示。线程里拿结果，回主线程改控件。"""
+        try:
+            from translator_core import check_latest_release
+            newer, tag, url = check_latest_release()
+            if newer and tag:
+                log("update available: %s %s" % (tag, url))
+                self.after(0, lambda: self.status(
+                    "有新版本 %s —— %s" % (tag, url or "见项目主页的 Releases")))
+        except Exception as e:
+            log("update check failed: %r" % e)
 
     def _install_hotkeys(self):
         try:
