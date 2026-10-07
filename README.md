@@ -102,8 +102,9 @@ set PFT_MODEL_DIR=D:\somewhere\sherpa-onnx-sense-voice-...
 
 ## 界面
 
-
 **主窗口**（两栏并排，可拖分栏线）
+
+![主界面](docs/main-window.png)
 
 ```
 会话 [chatGPT ▾] [新建][重命名][删除] │ 后端 [内置 DeepSeek ▾][设置][悬浮窗] │ 语气 [自动判断 ▾]
