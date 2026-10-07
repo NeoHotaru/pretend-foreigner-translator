@@ -1,0 +1,14 @@
+# 假装外国人 · 源码运行所需
+# 安装包 / 便携版不用管这个文件，它们已经打好了运行时。
+requests
+numpy
+scipy
+sounddevice
+
+# 语音识别（可选；不打这两个也能用翻译和悬浮窗）
+sherpa-onnx
+onnxruntime
+
+# 只有把语音后端换成 whisper 时才需要：
+# faster-whisper
+# ctranslate2

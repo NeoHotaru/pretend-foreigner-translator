@@ -1,0 +1,35 @@
+# 用户数据 —— 绝对不能提交
+# 前者含明文 API Key，后者是你的对话记录
+pretend_foreigner.config.json
+pretend_foreigner.sessions.json
+translate_app.config.json
+translate_app.sessions.json
+
+# 语音识别模型（228 MB，自己下，见 README）
+models/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 日志和临时文件
+*.log
+.asr_test/
+_asr_test/
+*.tar.bz2
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- build artifacts (never commit) ----
+build-env/
+dist/
+build/
+installer/
+*.spec
+requirements-lock.txt
