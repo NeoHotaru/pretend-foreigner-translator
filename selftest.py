@@ -427,6 +427,23 @@ def test_ui():
     else:
         bad("App 构造函数跑完整了", "缺: %s" % miss)
 
+    # "检查更新"的线程必须在 App.__init__ 里启动。
+    # 踩过：它被放进了 _run_setup_if_needed()，而那个方法对配好引擎的机器直接 return，
+    # 于是老用户的检查从来没跑过 —— 日志里连一行都没有，查了很久。
+    import ast as _ast
+    _src = open(os.path.join(SRC, "translate_app.py"), encoding="utf-8").read()
+    _tree = _ast.parse(_src)
+    _in_init = False
+    for _node in _ast.walk(_tree):
+        if isinstance(_node, _ast.FunctionDef) and _node.name == "__init__":
+            for _sub in _ast.walk(_node):
+                if isinstance(_sub, _ast.Attribute) and _sub.attr == "_check_updates":
+                    _in_init = True
+    if _in_init:
+        ok("检查更新的线程是在 __init__ 里启动的")
+    else:
+        bad("检查更新的线程不在 __init__ 里（是不是又放错方法了？）")
+
     # 快捷键编辑器：键名必须能往返，取当前键位必须和注册用的是同一份来源
     try:
         import overlay as O

@@ -753,6 +753,14 @@ class App(tk.Tk):
         if self.t.config.get("globalHotkeys", True):
             self._hk_id = self.after(500, self._install_hotkeys)
 
+        # 悄悄问一次有没有新版本。后台线程，失败只写日志、不打扰用户。
+        # ⚠ 必须待在 __init__ 里。踩过:上一版误放进 _run_setup_if_needed()，
+        #   而那个方法第一句是 "if not needs_setup(): return" ——
+        #   于是所有已经配好引擎的机器（也就是全部老用户）永远走不到这一步，
+        #   日志里从来没有 update 那一行。
+        if self.t.config.get("checkUpdates", True):
+            threading.Thread(target=self._check_updates, daemon=True).start()
+
     def _run_setup_if_needed(self):
         """公开版本第一次运行时弹向导，逼用户先选一个翻译引擎。
 
@@ -780,11 +788,6 @@ class App(tk.Tk):
             return
         self.refresh_backends()
         self.load_session_into_ui()
-
-        # 悄悄问一次有没有新版本。后台线程 + 短超时，失败什么也不做。
-        # 设 config["checkUpdates"]=false 可以关掉。
-        if self.t.config.get("checkUpdates", True):
-            threading.Thread(target=self._check_updates, daemon=True).start()
 
     def _check_updates(self):
         """只在新版真的存在时提示。线程里拿结果，回主线程改控件。"""
