@@ -54,7 +54,7 @@ BUILTIN_BASE = "https://api.deepseek.com"
 BUILTIN_MODEL = "deepseek-chat"
 
 # 本程序版本。**改版本时这里和 installer.iss 的 AppVer 要一起改。**
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 REPO_SLUG = "NeoHotaru/pretend-foreigner-translator"
 
 
@@ -75,11 +75,16 @@ def parse_version(s):
     return tuple(out) or (0,)
 
 
-def check_latest_release(timeout=6):
+def check_latest_release(timeout=20):
     """问一次 GitHub 的最新 release。
 
     返回 (有没有新版, 最新版本号, 下载页 URL)；任何失败都返回 (False, None, None)。
-    **这个函数不许影响启动** —— 所以超时短、异常全吞。
+    **这个函数不许影响启动** —— 所以异常全吞。
+
+    ⚠ 超时原本是 6 秒，实测本机走代理问一次要 6.5 秒 —— 正好卡在边界，
+    于是每次都超时、每次都"看起来像没有新版"。改成 20 秒。
+    ⚠ 注意:失败时这里【不抛异常也不返回原因】，所以调用方要自己把结果写进日志，
+    否则"失败"和"没有新版"无法区分。
     """
     try:
         import urllib.request

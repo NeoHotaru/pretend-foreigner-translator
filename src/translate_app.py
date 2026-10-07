@@ -791,8 +791,10 @@ class App(tk.Tk):
         try:
             from translator_core import check_latest_release
             newer, tag, url = check_latest_release()
+            # 无论成败都写一行 —— 否则"请求失败"和"没有新版"在日志里长得一样，
+            # 用户没法判断到底是哪种（我因此给过错误的排查指引）。
+            log("update check: newer=%s tag=%s url=%s" % (newer, tag, url))
             if newer and tag:
-                log("update available: %s %s" % (tag, url))
                 self.after(0, lambda: self.status(
                     "有新版本 %s —— %s" % (tag, url or "见项目主页的 Releases")))
         except Exception as e:
