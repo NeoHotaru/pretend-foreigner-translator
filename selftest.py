@@ -689,6 +689,13 @@ def test_setup():
         else:
             bad("干净机器上内置后端标记为不可用", (k, why))
 
+        # 它也不该出现在列表里 —— 否则就是"列得出来、选了什么也不能用"的死选项。
+        listed = [k for _, k in t2.backends()]
+        if "builtin" not in listed:
+            ok("干净机器上不列出内置 DeepSeek", "、".join(listed))
+        else:
+            bad("干净机器上不该列出内置 DeepSeek", listed)
+
         if t2.has_own_backend() is False and t2.needs_setup() is True:
             ok("干净机器会弹首次运行向导")
         else:

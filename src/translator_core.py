@@ -54,7 +54,7 @@ BUILTIN_BASE = "https://api.deepseek.com"
 BUILTIN_MODEL = "deepseek-chat"
 
 # 本程序版本。**改版本时这里和 installer.iss 的 AppVer 要一起改。**
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 REPO_SLUG = "NeoHotaru/pretend-foreigner-translator"
 
 
@@ -741,10 +741,11 @@ class Translator:
         """
         items = []
 
+        # 只在真的设了 PFT_API_KEY 时才列出来。
+        # 踩过：删掉"自动找 key"之后仍无条件列出它，于是没设这个变量的人会看到一个
+        # 【列得出来、选了什么也不能用】的死选项（用户当场踩到，问"怎么还有个内置"）。
         if read_env_key():
-            items.append(("内置 DeepSeek（已提供 key）", "builtin"))
-        else:
-            items.append(("内置 DeepSeek（未提供 key）", "builtin"))
+            items.append(("内置 DeepSeek（环境变量提供）", "builtin"))
 
         for p in self.config.get("providers", []):
             has_key = bool((p.get("apiKey") or "").strip())
@@ -809,9 +810,9 @@ class Translator:
         self.save_config()
 
     def active_backend(self):
-        key = self.config.get("activeBackend", "builtin")
+        key = self.config.get("activeBackend", "google")
         if key not in [k for _, k in self.backends()]:
-            key = "builtin"
+            key = "google"      # 兜底必须是永远可用的那个，不能指向可能不存在的 builtin
         return key
 
     def get_provider(self, name):

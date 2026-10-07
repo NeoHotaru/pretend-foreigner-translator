@@ -20,8 +20,8 @@
 
 | 包 | 大小 | 说明 |
 |---|---|---|
-| **安装包** `pretend-foreigner-setup-1.0.2.exe` | 200 MB | 双击安装。向导里可以改安装目录（默认在当前用户的 `%LOCALAPPDATA%\Programs`，**那一页会显示各盘剩余空间**，C 盘紧就当场改）。带开始菜单、桌面快捷方式、卸载器。 |
-| **便携版** `pretend-foreigner-portable-1.0.2.zip` | 234 MB | 解压到任意位置，双击里面的 `pretend-foreigner.exe`。不写注册表、不装服务。 |
+| **安装包** `pretend-foreigner-setup-1.0.3.exe` | 200 MB | 双击安装。向导里可以改安装目录（默认在当前用户的 `%LOCALAPPDATA%\Programs`，**那一页会显示各盘剩余空间**，C 盘紧就当场改）。带开始菜单、桌面快捷方式、卸载器。 |
+| **便携版** `pretend-foreigner-portable-1.0.3.zip` | 234 MB | 解压到任意位置，双击里面的 `pretend-foreigner.exe`。不写注册表、不装服务。 |
 
 两个包**都已经内含 228 MB 的语音识别模型**，装完就能用语音。
 （只有从源码运行才需要自己下模型，见下面的「依赖」。）
