@@ -155,7 +155,6 @@ set PFT_MODEL_DIR=D:\somewhere\sherpa-onnx-sense-voice-...
 
 **中文识别为什么不用 Whisper**：同一批音频实测，SenseVoice 平均 CER 5.9%，
 faster-whisper base 24.8%，而且 Whisper 会把"日志"听成"日质"、还会输出繁体。
-详见 `项目书.md` §5.5。
 
 ---
 
@@ -171,7 +170,6 @@ src/ui_kit.py            共用绘制零件
 src/setup_wizard.py      首次运行向导
 docs/CORE_API.md         后端接口文档（想换前端读这个）
 selftest.py              一条命令跑完 63 项回归
-项目书.md                 完整设计与踩坑记录
 ```
 
 ---
