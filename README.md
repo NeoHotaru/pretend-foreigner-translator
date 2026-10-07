@@ -16,6 +16,8 @@
 
 **Windows 专用。** 两种装法，功能完全一样：
 
+> **下载页：https://github.com/NeoHotaru/pretend-foreigner/releases**
+
 | 包 | 大小 | 说明 |
 |---|---|---|
 | **安装包** `pretend-foreigner-setup-1.0.0.exe` | 200 MB | 双击安装。向导里可以改安装目录（默认在当前用户的 `%LOCALAPPDATA%\Programs`，**那一页会显示各盘剩余空间**，C 盘紧就当场改）。带开始菜单、桌面快捷方式、卸载器。 |
