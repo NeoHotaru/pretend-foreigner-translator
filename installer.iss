@@ -1,8 +1,8 @@
-﻿; 假装外国人 · Inno Setup 6 安装脚本
+﻿; 假装外国人翻译器 · Inno Setup 6 安装脚本
 ; 编译: ISCC.exe installer.iss      （本文件必须存成 UTF-8 with BOM，否则中文会乱）
 
-#define AppName        "假装外国人"
-#define AppNameEn      "Pretend Foreigner"
+#define AppName        "假装外国人翻译器"
+#define AppNameEn      "Pretend Foreigner Translator"
 #define AppVer         "1.0.0"
 #define AppPublisher   "NeoHotaru"
 #define AppURL         "https://github.com/NeoHotaru"

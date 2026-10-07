@@ -16,7 +16,7 @@
 
 **Windows 专用。** 两种装法，功能完全一样：
 
-> **下载页：https://github.com/NeoHotaru/pretend-foreigner/releases**
+> **下载页：https://github.com/NeoHotaru/pretend-foreigner-translator/releases**
 
 | 包 | 大小 | 说明 |
 |---|---|---|
