@@ -33,3 +33,6 @@ build/
 installer/
 *.spec
 requirements-lock.txt
+
+# 内部开发记录，不进公开仓库
+项目书.md
