@@ -427,6 +427,22 @@ def test_ui():
     else:
         bad("App 构造函数跑完整了", "缺: %s" % miss)
 
+    # 快捷键编辑器：键名必须能往返，取当前键位必须和注册用的是同一份来源
+    try:
+        import overlay as O
+        dlg = UI.SettingsDialog(app)
+        dlg.withdraw()
+        rt = all(O.key_name(0, vk) == name for name, vk in O.HOTKEY_KEYS)
+        pair = O.hotkey_pair(app)
+        shown = O.key_name(*pair[0])
+        if rt and shown in dlg._hk_lbl["toggle"].cget("text"):
+            ok("快捷键编辑器", "可选键 %d 个，键名往返一致，显示 %s" % (len(O.HOTKEY_KEYS), shown))
+        else:
+            bad("快捷键编辑器", "往返=%s 显示=%s 取到=%s" % (rt, dlg._hk_lbl["toggle"].cget("text"), pair))
+        dlg.destroy()
+    except Exception as e:
+        bad("快捷键编辑器", e)
+
     # 状态栏轮询真的在工作（_pump 是通过 after 排的，能被取消掉就说明排上了）
     try:
         app.after_cancel(app._pump_id)
@@ -615,6 +631,29 @@ def test_setup():
         ok("代码里没有写死的本机路径（只看字符串字面量）")
     else:
         bad("代码里有写死的本机路径", hits)
+
+    # 9.2 界面文件里不许出现【已废弃的】快捷键字面量。
+    # 踩过：全局键从 Ctrl+Alt+O / Ctrl+Alt+T 换成 Win+Alt+O / Win+Alt+V（旧键被别的程序占用），
+    # translate_app.py 里状态栏那行是写死的旧字符串，没跟着改 —— 界面一直显示废弃的键，
+    # 而 README 写的是新键，两边对不上。键名只能由 overlay 按 config 生成。
+    #
+    # 故意写窄：界面里合法地写着 "Ctrl+Enter"，所以不能拿 "Ctrl+" 这种泛模式去扫。
+    dead = ("Ctrl+Alt+O", "Ctrl+Alt+T")
+    hits2 = []
+    for name in ("translate_app.py", "setup_wizard.py", "ui_kit.py"):
+        p = os.path.join(SRC, name)
+        if not os.path.isfile(p):
+            continue
+        tree = ast.parse(open(p, encoding="utf-8").read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                v = node.value
+                if any(d in v for d in dead):
+                    hits2.append("%s:%d %r" % (name, node.lineno, v[:60]))
+    if not hits2:
+        ok("界面文件里没有废弃的快捷键字面量")
+    else:
+        bad("界面文件里还写着废弃的快捷键（应由 overlay 生成）", hits2)
 
     # 9.2 免费机翻后端存在
     t = C.Translator(config=dict(C.DEFAULT_CONFIG), sessions=[C.new_session("x")])

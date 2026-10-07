@@ -43,6 +43,12 @@ MOD_WIN = 0x0008
 MOD_NOREPEAT = 0x4000
 WM_HOTKEY = 0x0312
 
+# 设置界面里可以选的非修饰键（显示名, 虚拟键码）。
+# 只放字母 / 数字 / F1-F12 —— 再多也没人用，而且容易和系统键打架。
+HOTKEY_KEYS = ([(chr(c), c) for c in range(0x41, 0x5B)]        # A-Z
+               + [(str(d), 0x30 + d) for d in range(10)]        # 0-9
+               + [("F%d" % i, 0x70 + i - 1) for i in range(1, 13)])
+
 # 默认快捷键。
 # 为什么不用 Ctrl+Alt+O / Ctrl+Alt+T：实测这两个已被别的程序占用（错误码 1409）。
 # 为什么不用 Ctrl+Shift+O / Ctrl+Shift+T：那两个虽然空着，但浏览器/编辑器都在用
@@ -63,7 +69,8 @@ def key_name(mods, vk):
     if mods & MOD_SHIFT:
         parts.append("Shift")
     parts.append(chr(vk) if 0x41 <= vk <= 0x5A else
-                 ("F%d" % (vk - 0x70 + 1) if 0x70 <= vk <= 0x7B else "0x%X" % vk))
+                 ("%d" % (vk - 0x30) if 0x30 <= vk <= 0x39 else
+                  ("F%d" % (vk - 0x70 + 1) if 0x70 <= vk <= 0x7B else "0x%X" % vk)))
     return "+".join(parts)
 
 
@@ -527,10 +534,78 @@ def install_hotkeys(app, toggle_hotkey=True, clip_hotkey=True):
     return th
 
 
+def hotkey_pair(app):
+    """当前生效的两个键 —— (toggle, clip)，都从 config 读、都有默认值。
+
+    界面上任何要提到"按哪个键"的地方都必须从这里取，**不许写死键名**。
+    踩过两次：键位从 Ctrl+Alt 换成 Win+Alt 之后，状态栏和悬浮窗提示里的旧字符串
+    都没跟着改，界面上一直在报已经废弃的键，和 README 对不上。
+    """
+    cfg = app.t.config
+    return ((cfg.get("hotkeyToggle") or DEFAULT_TOGGLE),
+            (cfg.get("hotkeyClipboard") or DEFAULT_CLIP))
+
+
+def toggle_key_name(app):
+    """当前"显示/隐藏悬浮窗"的键名。"""
+    return key_name(*hotkey_pair(app)[0])
+
+
 def hotkey_help(app):
     """给设置界面显示用：当前键位 + 能不能用。"""
-    cfg = app.t.config
-    t_mods, t_vk = cfg.get("hotkeyToggle") or DEFAULT_TOGGLE
-    c_mods, c_vk = cfg.get("hotkeyClipboard") or DEFAULT_CLIP
+    (t_mods, t_vk), (c_mods, c_vk) = hotkey_pair(app)
     return ("%s  显示/隐藏悬浮窗\n%s  翻译剪贴板"
             % (key_name(t_mods, t_vk), key_name(c_mods, c_vk)))
+
+
+def hotkey_line(app):
+    """状态栏用的一行键位说明。"""
+    (t_mods, t_vk), (c_mods, c_vk) = hotkey_pair(app)
+    return ("%s 悬浮窗 · %s 翻剪贴板"
+            % (key_name(t_mods, t_vk), key_name(c_mods, c_vk)))
+
+
+# ───────────────────────── 改键位 ─────────────────────────
+
+PROBE_ID = 9001          # 试注册用的临时 id，别和正式键（1 / 2）撞
+
+
+def probe_hotkey(mods, vk, timeout=1.5):
+    """试着注册一次然后立刻注销。返回 (能不能用, 原因)。
+
+    设置界面在用户选完键位后调它 —— 冲突要当场报出来，不能静默通过。
+    """
+    if not mods:
+        return False, "至少要一个修饰键（Ctrl / Alt / Shift / Win）"
+    th = HotkeyThread({PROBE_ID: (mods, vk, key_name(mods, vk))})
+    th.start()
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if th.registered or th.failed:
+            break
+        time.sleep(0.05)
+    th.stop()
+    if th.registered:
+        return True, ""
+    if th.failed:
+        return False, th.failed[PROBE_ID][2]
+    return False, "注册结果未知（超时）"
+
+
+def apply_hotkeys(app):
+    """停掉旧的、按当前 config 重新装一遍。返回 (成不成, 说明)。
+
+    设置里改完键位当场调它 —— 不用重启程序。
+    """
+    old = getattr(app, "hotkeys", None)
+    if old is not None:
+        try:
+            old.stop()
+        except Exception:
+            pass
+        time.sleep(0.25)     # 等旧线程把键注销掉，否则同一个键会注册失败
+    th = install_hotkeys(app)
+    app.hotkeys = th
+    if th.failed:
+        return False, "；".join("%s → %s" % (v[0], v[2]) for v in th.failed.values())
+    return True, hotkey_line(app)

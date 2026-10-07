@@ -448,19 +448,34 @@ class SettingsDialog(tk.Toplevel):
                   style="Hint.TLabel", wraplength=200,
                   justify="left").pack(anchor="w", pady=(6, 0))
 
-        # —— 快捷键 ——
+        # —— 快捷键（可改）——
         hkf = ttk.LabelFrame(left, text="全局快捷键", padding=6)
         hkf.pack(fill="x", pady=(10, 0))
         try:
-            from overlay import hotkey_help
-            tip = hotkey_help(app)
+            from overlay import hotkey_pair, key_name
+            (t_mods, t_vk), (c_mods, c_vk) = hotkey_pair(app)
+            self._hk = {"toggle": [t_mods, t_vk], "clip": [c_mods, c_vk]}
         except Exception as e:
-            tip = "取不到（%s）" % e
-        ttk.Label(hkf, text=tip, style="Hint.TLabel",
-                  justify="left").pack(anchor="w")
-        ttk.Label(hkf, text="全局生效，其它程序里也能按。\n改了要重启程序。",
-                  style="Hint.TLabel", wraplength=200,
-                  justify="left").pack(anchor="w", pady=(4, 0))
+            self._hk = {"toggle": list((0, 0x4F)), "clip": list((0, 0x56))}
+            ttk.Label(hkf, text="取不到当前键位（%s）" % e,
+                      style="Hint.TLabel").pack(anchor="w")
+        self._hk_lbl = {}
+        for _k, _label in (("toggle", "显示/隐藏悬浮窗"), ("clip", "翻译剪贴板")):
+            _row = ttk.Frame(hkf)
+            _row.pack(fill="x", pady=(2, 0))
+            ttk.Label(_row, text=_label, width=14,
+                      style="Hint.TLabel").pack(side="left")
+            ttk.Button(_row, text="改", width=4,
+                       command=lambda k=_k: self.on_rebind(k)).pack(side="left")
+            _lb = ttk.Label(_row, text=key_name(*self._hk[_k]), style="Hint.TLabel")
+            _lb.pack(side="left", padx=6)
+            self._hk_lbl[_k] = _lb
+        ttk.Button(hkf, text="恢复默认",
+                   command=self.on_hotkey_default).pack(anchor="w", pady=(6, 0))
+        self.lbl_hk = ttk.Label(
+            hkf, text="全局生效，其它程序里也能按。\n改完点「保存并关闭」立刻生效，不用重启。",
+            style="Hint.TLabel", wraplength=210, justify="left")
+        self.lbl_hk.pack(anchor="w", pady=(4, 0))
 
         def field(label, widget):
             ttk.Label(right, text=label, style="Hint.TLabel").pack(anchor="w", pady=(8, 2))
@@ -574,6 +589,86 @@ class SettingsDialog(tk.Toplevel):
         except Exception as e:
             self.lbl_tip.configure(text="测试失败：%s" % e)
 
+    # ── 快捷键编辑 ──
+
+    def on_rebind(self, which):
+        """改一个键：勾修饰键 + 选按键，选定后立刻试注册，冲突当场报。"""
+        from overlay import (probe_hotkey, key_name, MOD_ALT, MOD_CONTROL,
+                             MOD_SHIFT, MOD_WIN, HOTKEY_KEYS)
+        dlg = tk.Toplevel(self)
+        dlg.title("改快捷键")
+        dlg.transient(self)
+        dlg.resizable(False, False)
+
+        _mods0, _vk0 = self._hk[which]
+        pairs = (("Ctrl", MOD_CONTROL), ("Alt", MOD_ALT),
+                 ("Shift", MOD_SHIFT), ("Win", MOD_WIN))
+        vs = {n: tk.BooleanVar(value=bool(_mods0 & m)) for n, m in pairs}
+
+        row = ttk.Frame(dlg, padding=10)
+        row.pack(fill="x")
+        for n, _m in pairs:
+            ttk.Checkbutton(row, text=n, variable=vs[n]).pack(side="left")
+        vk = tk.StringVar(value=key_name(0, _vk0))
+        ttk.Combobox(row, textvariable=vk, state="readonly", width=6,
+                     values=[k[0] for k in HOTKEY_KEYS]).pack(side="left", padx=8)
+
+        msg = ttk.Label(dlg, text="勾上至少一个修饰键，再选一个按键。",
+                        style="Hint.TLabel", wraplength=320, justify="left")
+        msg.pack(anchor="w", padx=10)
+
+        def mods_now():
+            m = 0
+            for n, bit in pairs:
+                if vs[n].get():
+                    m |= bit
+            return m
+
+        def vk_now():
+            for name, code in HOTKEY_KEYS:
+                if name == vk.get():
+                    return code
+            return None
+
+        def try_it():
+            m, v = mods_now(), vk_now()
+            if v is None:
+                msg.configure(text="先选一个按键。")
+                return
+            good, why = probe_hotkey(m, v)
+            if not good:
+                msg.configure(text="用不了：%s —— 换一个" % why)
+                return
+            self._hk[which] = [m, v]
+            self._hk_lbl[which].configure(text=key_name(m, v))
+            self.lbl_hk.configure(
+                text="已改成 %s —— 点「保存并关闭」生效。" % key_name(m, v))
+            dlg.destroy()
+
+        bb = ttk.Frame(dlg, padding=(10, 0, 10, 10))
+        bb.pack(fill="x")
+        ttk.Button(bb, text="测试并采用", command=try_it).pack(side="left")
+        ttk.Button(bb, text="取消", command=dlg.destroy).pack(side="left", padx=6)
+        dlg.grab_set()
+
+    def on_hotkey_default(self):
+        from overlay import DEFAULT_TOGGLE, DEFAULT_CLIP, key_name
+        self._hk["toggle"] = list(DEFAULT_TOGGLE)
+        self._hk["clip"] = list(DEFAULT_CLIP)
+        for k in ("toggle", "clip"):
+            self._hk_lbl[k].configure(text=key_name(*self._hk[k]))
+        self.lbl_hk.configure(text="已恢复默认 —— 点「保存并关闭」生效。")
+
+    def save_hotkeys(self):
+        """写进 config 并当场重新注册（不用重启）。"""
+        from overlay import apply_hotkeys
+        self.t.config["hotkeyToggle"] = list(self._hk["toggle"])
+        self.t.config["hotkeyClipboard"] = list(self._hk["clip"])
+        self.t.save_config()
+        good, info = apply_hotkeys(self.app)
+        self.lbl_hk.configure(text=("快捷键已生效：%s" % info) if good
+                              else ("装不上：%s" % info))
+
     def save_voice(self):
         self.t.config["asrBackend"] = ("sensevoice"
                                        if self.v_asr.get().startswith("SenseVoice")
@@ -589,6 +684,7 @@ class SettingsDialog(tk.Toplevel):
 
     def on_save(self):
         self.save_voice()
+        self.save_hotkeys()
         name = self.v_name.get().strip()
         if not name:
             self.lbl_tip.configure(text="名称不能空。")
@@ -682,14 +778,16 @@ class App(tk.Tk):
 
     def _install_hotkeys(self):
         try:
-            from overlay import install_hotkeys
+            from overlay import install_hotkeys, hotkey_line
             self.hotkeys = install_hotkeys(self)
             bad = self.hotkeys.failed
             if bad:
                 self.status("快捷键没装上：" + "；".join(
                     "%s → %s" % (v[0], v[2]) for v in bad.values()))
             else:
-                self.status("快捷键就绪：Ctrl+Alt+O 悬浮窗 · Ctrl+Alt+T 翻剪贴板")
+                # 不写死键名：实际注册的键来自 config，这里必须显示同一份来源。
+                # 踩过：键位从 Ctrl+Alt 换成 Win+Alt 后，这行字没改，界面一直报旧键。
+                self.status("快捷键就绪：" + hotkey_line(self))
         except Exception as e:
             log("hotkey install failed: %r" % e)
 
@@ -1180,7 +1278,8 @@ class App(tk.Tk):
             self.overlay.protocol("WM_DELETE_WINDOW", self.overlay.close)
         if self.overlay.winfo_viewable():
             self.overlay.withdraw()
-            self.status("悬浮窗已隐藏（Ctrl+Alt+O 可再叫出来）")
+            from overlay import toggle_key_name
+            self.status("悬浮窗已隐藏（%s 可再叫出来）" % toggle_key_name(self))
         else:
             self.overlay.deiconify()
             self.overlay.lift()
