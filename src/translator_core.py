@@ -54,7 +54,7 @@ BUILTIN_BASE = "https://api.deepseek.com"
 BUILTIN_MODEL = "deepseek-chat"
 
 # 本程序版本。**改版本时这里和 installer.iss 的 AppVer 要一起改。**
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.1.0"
 REPO_SLUG = "NeoHotaru/pretend-foreigner-translator"
 
 

@@ -7,16 +7,81 @@ ui_kit.py  —  界面用的小零件
 """
 
 import math
+import sys
+from pathlib import Path
 
 # 主色（跟主窗口保持一致）
-C_BG = "#f4f5f7"
-C_LINE = "#dfe3e8"
-C_MINE = "#2563eb"      # 我 → 对方
-C_PEER = "#0f9d58"      # 对方 → 我
-C_OUT_BG = "#fbfcfe"
-C_MUTED = "#8b93a1"
+C_BG = "#f5f7fa"
+C_LINE = "#dde4eb"
+C_MINE = "#2459a6"      # 我 → 对方
+C_PEER = "#08796d"      # 对方 → 我
+C_OUT_BG = "#f3f7fb"
+C_MUTED = "#596b7d"
+C_TEXT = "#203247"
+C_SURFACE = "#ffffff"
+C_SIDEBAR = "#edf2f7"
+
+# Windows 原生中英文字体，字号以 point 计，跟随系统 DPI。
+FONT_UI = ("Microsoft YaHei UI", 10)
+FONT_SMALL = ("Microsoft YaHei UI", 9)
+FONT_HEAD = ("Microsoft YaHei UI", 13, "bold")
+FONT_TEXT = ("Microsoft YaHei UI", 12)
+FONT_TITLE = ("Microsoft YaHei UI", 21, "bold")
 C_OK = "#15803d"        # 成功/可用
 C_BAD = "#b91c1c"       # 失败/不可用
+
+
+def asset_path(name):
+    """源码与 PyInstaller 包内使用同一套静态资源。"""
+    base = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+    return base / "assets" / name
+
+
+def brand_icon(master, size=32):
+    import tkinter as tk
+    return tk.PhotoImage(master=master, file=str(asset_path("app-icon-%d.png" % size)))
+
+
+def apply_app_icon(root):
+    """设置主窗口及后续子窗口默认图标，保留 Tk 图像引用。"""
+    root._app_icon_images = [brand_icon(root, size) for size in (32, 64)]
+    root.iconphoto(True, *root._app_icon_images)
+    if sys.platform == "win32":
+        root.iconbitmap(default=str(asset_path("app-icon.ico")))
+
+
+def text_surface(master, text_class=None, **kwargs):
+    """有内边距、焦点边框和滚动条的原生编辑区。"""
+    import tkinter as tk
+    from tkinter import ttk
+
+    bg = kwargs.get("bg", C_SURFACE)
+    frame = tk.Frame(master, bg=bg, highlightthickness=1,
+                     highlightbackground=C_LINE, bd=0)
+    frame.rowconfigure(0, weight=1)
+    frame.columnconfigure(0, weight=1)
+    defaults = dict(wrap="word", font=FONT_TEXT, fg=C_TEXT, bg=bg,
+                    relief="flat", borderwidth=0, highlightthickness=0,
+                    padx=14, pady=12, spacing1=2, spacing3=5,
+                    insertbackground=C_MINE, selectbackground="#cfe1f5",
+                    selectforeground=C_TEXT, width=1)
+    defaults.update(kwargs)
+    widget = (text_class or tk.Text)(frame, **defaults)
+    widget.grid(row=0, column=0, sticky="nsew")
+    scroll = ttk.Scrollbar(frame, orient="vertical", command=widget.yview, takefocus=False)
+    scroll.grid(row=0, column=1, sticky="ns", padx=(0, 3), pady=4)
+    widget.configure(yscrollcommand=scroll.set)
+    widget.bind("<FocusIn>", lambda e: frame.configure(
+        highlightbackground=C_MINE), add="+")
+    widget.bind("<FocusOut>", lambda e: frame.configure(
+        highlightbackground=C_LINE), add="+")
+    def move_focus(forward):
+        (widget.tk_focusNext() if forward else widget.tk_focusPrev()).focus_set()
+        return "break"
+    widget.bind("<Tab>", lambda e: move_focus(True))
+    widget.bind("<Shift-Tab>", lambda e: move_focus(False))
+    widget.bind("<ISO_Left_Tab>", lambda e: move_focus(False))
+    return frame, widget
 
 # ───────────────────────── 喇叭电平表 ─────────────────────────
 
@@ -86,4 +151,11 @@ def readonly_text(widget):
             return None
         return "break"
     widget.bind("<Key>", on_key)
+    def select_all(_e):
+        widget.tag_add("sel", "1.0", "end-1c")
+        return "break"
+    widget.bind("<Control-a>", select_all)
+    widget.bind("<Control-A>", select_all)
+    for event in ("<<Paste>>", "<<Cut>>", "<<Clear>>", "<Button-2>"):
+        widget.bind(event, lambda e: "break")
     return widget

@@ -32,5 +32,11 @@ dist/
 build/
 installer/
 *.spec
+!pretend-foreigner.spec
 requirements-lock.txt
 
+# 本机诊断与构建日志（不进入公开仓库）
+artifacts/**/build-result.txt
+artifacts/**/selftest-result.txt
+artifacts/**/*.png
+artifacts/release-*/

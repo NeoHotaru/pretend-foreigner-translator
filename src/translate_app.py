@@ -43,14 +43,11 @@ DEFAULT_GEOMETRY = "1240x860"
 
 # ───────────────────────── 外观 ─────────────────────────
 
-FONT_UI = ("Microsoft YaHei UI", 10)
-FONT_SMALL = ("Microsoft YaHei UI", 9)
-FONT_HEAD = ("Microsoft YaHei UI", 10, "bold")
-FONT_TEXT = ("Microsoft YaHei UI", 10)
-
 # 颜色统一从 ui_kit 取，别各定义一份（改主题只改一个地方）
 from ui_kit import (C_BAD, C_BG, C_LINE, C_MINE, C_MUTED,  # noqa: E402
-                    C_OK, C_OUT_BG, C_PEER)
+                    C_OK, C_OUT_BG, C_PEER, C_TEXT, C_SURFACE, C_SIDEBAR,
+                    FONT_UI, FONT_SMALL, FONT_HEAD, FONT_TEXT, FONT_TITLE,
+                    text_surface, readonly_text, apply_app_icon)
 
 
 def setup_style(root):
@@ -62,25 +59,45 @@ def setup_style(root):
 
     st.configure(".", font=FONT_UI, background=C_BG)
     st.configure("TFrame", background=C_BG)
-    st.configure("TLabel", background=C_BG, foreground="#1f2430")
+    st.configure("TLabel", background=C_BG, foreground=C_TEXT)
     st.configure("Hint.TLabel", background=C_BG, foreground=C_MUTED, font=FONT_SMALL)
-    st.configure("Head.TLabel", background=C_BG, foreground="#1f2430", font=FONT_HEAD)
+    st.configure("Head.TLabel", background=C_BG, foreground=C_TEXT, font=FONT_HEAD)
+    st.configure("Title.TLabel", background=C_BG, foreground=C_TEXT, font=FONT_TITLE)
+    st.configure("Card.TFrame", background=C_SURFACE)
+    st.configure("Card.TLabel", background=C_SURFACE, foreground=C_TEXT)
+    st.configure("CardHint.TLabel", background=C_SURFACE, foreground=C_MUTED, font=FONT_SMALL)
+    st.configure("CardHead.TLabel", background=C_SURFACE, foreground=C_TEXT, font=FONT_HEAD)
+    st.configure("Side.TFrame", background=C_SIDEBAR)
+    st.configure("Side.TLabel", background=C_SIDEBAR, foreground=C_TEXT)
+    st.configure("SideHint.TLabel", background=C_SIDEBAR, foreground=C_MUTED, font=FONT_SMALL)
 
-    st.configure("TButton", padding=(10, 4), font=FONT_SMALL)
-    st.map("TButton", background=[("active", "#e8ecf1")])
+    st.configure("TButton", padding=(12, 7), font=FONT_UI, background=C_SURFACE,
+                 foreground=C_TEXT, borderwidth=1, relief="flat")
+    st.map("TButton", background=[("pressed", "#dce5ef"), ("active", "#e9eff6")])
+    st.configure("Quiet.TButton", padding=(8, 6), font=FONT_SMALL, borderwidth=0)
+    st.configure("Side.TButton", background=C_SIDEBAR, font=FONT_SMALL, padding=(8, 7))
 
-    st.configure("Go.TButton", padding=(14, 5), font=FONT_UI,
+    st.configure("Go.TButton", padding=(18, 8), font=FONT_UI,
                  foreground="#ffffff", background=C_MINE)
     st.map("Go.TButton",
-           background=[("active", "#1d4ed8"), ("disabled", "#a9bce8")],
+           background=[("disabled", "#a3b8d3"), ("pressed", "#173e77"), ("active", "#1c4b8f")],
            foreground=[("disabled", "#eef2ff")])
+    st.configure("PeerGo.TButton", padding=(18, 8), font=FONT_UI,
+                 foreground="white", background=C_PEER)
+    st.map("PeerGo.TButton", background=[("disabled", "#97bcb6"),
+           ("pressed", "#075b52"), ("active", "#06685e")],
+           foreground=[("disabled", "#eef7f5")])
 
-    st.configure("TEntry", fieldbackground="#ffffff", padding=3)
-    st.configure("TCombobox", padding=3)
-    st.configure("TSpinbox", padding=3)
+    st.configure("TEntry", fieldbackground=C_SURFACE, padding=7, bordercolor=C_LINE)
+    st.configure("TCombobox", padding=6, arrowsize=14, bordercolor=C_LINE)
+    st.map("TCombobox", fieldbackground=[("readonly", C_SURFACE)],
+           selectbackground=[("readonly", C_SURFACE)],
+           selectforeground=[("readonly", C_TEXT)])
+    st.configure("TSpinbox", padding=6, bordercolor=C_LINE)
+    st.configure("TPanedwindow", background=C_BG)
     st.configure("Treeview", background="#ffffff", fieldbackground="#ffffff",
-                 rowheight=22, font=FONT_SMALL)
-    st.configure("Treeview.Heading", font=FONT_SMALL, padding=(4, 3))
+                 rowheight=30, font=FONT_SMALL, borderwidth=0)
+    st.configure("Treeview.Heading", font=FONT_SMALL, padding=(8, 6), background=C_BG)
     st.configure("Status.TLabel", background=C_BG, foreground="#4b5563", font=FONT_SMALL)
     return st
 
@@ -159,26 +176,13 @@ class PlaceholderText(tk.Text):
         self.put_placeholder()
 
 
-def readonly_text(widget):
-    """只读，但允许选中和 Ctrl+C / Ctrl+A。"""
-    def on_key(e):
-        if (e.state & 0x4) and e.keysym.lower() in ("c", "a"):
-            return None
-        if e.keysym in ("Left", "Right", "Up", "Down", "Home", "End", "Prior", "Next",
-                        "Shift_L", "Shift_R", "Control_L", "Control_R", "Escape", "Tab"):
-            return None
-        return "break"
-    widget.bind("<Key>", on_key)
-    return widget
-
-
 # ───────────────────────── 一栏 ─────────────────────────
 
 class Lane(ttk.Frame):
     """一栏：输入 -> 翻译 -> 译文，外加本栏自己的记忆。"""
 
     def __init__(self, master, side, accent, on_translate, on_copy, on_voice, app):
-        super().__init__(master, style="Card.TFrame")
+        super().__init__(master, style="Card.TFrame", padding=20)
         self.app = app
         self.side = side                      # "toPeer" / "fromPeer"
         self.accent = accent
@@ -186,71 +190,88 @@ class Lane(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
 
-        strip = tk.Frame(self, bg=accent)
+        strip = ttk.Frame(self, style="Card.TFrame")
         strip.grid(row=0, column=0, sticky="ew")
         strip.columnconfigure(1, weight=1)
-        self.lbl_title = tk.Label(strip, text="", bg=accent, fg="#ffffff",
-                                  font=FONT_HEAD, anchor="w", padx=10, pady=5)
+        self.lbl_title = tk.Label(strip, text="", bg=C_SURFACE, fg=accent,
+                                  font=FONT_HEAD, anchor="w")
         self.lbl_title.grid(row=0, column=0, sticky="w")
-        self.lbl_pair = tk.Label(strip, text="", bg=accent, fg="#e9eefb",
-                                 font=FONT_SMALL, anchor="e", padx=10)
-        self.lbl_pair.grid(row=0, column=1, sticky="e")
+        self.lbl_pair = tk.Label(strip, text="", bg=C_SURFACE, fg=C_MUTED,
+                                 font=FONT_SMALL, anchor="w")
+        self.lbl_pair.grid(row=1, column=0, columnspan=2, sticky="w", pady=(5, 18))
 
-        pad = ttk.Frame(self)
+        pad = ttk.Frame(self, style="Card.TFrame")
         pad.grid(row=1, column=0, sticky="nsew")
         pad.columnconfigure(0, weight=1)
-        pad.rowconfigure(1, weight=5)         # 输入
-        pad.rowconfigure(4, weight=5)         # 译文
-        pad.rowconfigure(5, weight=0)         # 记忆不参与拉伸
+        pad.rowconfigure(1, weight=1)         # 输入
+        pad.rowconfigure(5, weight=1)         # 译文
 
-        ttk.Label(pad, text="输入", style="Hint.TLabel").grid(
-            row=0, column=0, sticky="w", padx=8, pady=(6, 2))
-        self.txt_in = PlaceholderText(pad, placeholder="在这里粘贴这一侧要说的话…",
-                                      height=7, wrap="word", font=FONT_TEXT,
-                                      relief="solid", borderwidth=1, undo=True,
-                                      highlightthickness=1, highlightbackground=C_LINE,
-                                      highlightcolor=accent)
-        self.txt_in.grid(row=1, column=0, sticky="nsew", padx=8)
+        ttk.Label(pad, text="你的原话" if side == "toPeer" else "对方的原文",
+                  style="CardHint.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        surface, self.txt_in = text_surface(
+            pad, PlaceholderText, placeholder="写下你想说的话，也可以用语音输入…"
+            if side == "toPeer" else "粘贴对方的回复…", height=6, undo=True)
+        surface.grid(row=1, column=0, sticky="nsew")
 
-        bar = ttk.Frame(pad)
-        bar.grid(row=2, column=0, sticky="ew", padx=8, pady=(6, 4))
-        self.btn_go = ttk.Button(bar, text="翻译", style="Go.TButton",
-                                 command=on_translate, width=8)
+        bar = ttk.Frame(pad, style="Card.TFrame")
+        bar.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        self.btn_go = ttk.Button(bar, text="翻译", style="Go.TButton"
+                                 if side == "toPeer" else "PeerGo.TButton",
+                                 command=on_translate, width=6)
         self.btn_go.pack(side="left")
-        self.btn_mic = ttk.Button(bar, text="🎤 说话", command=on_voice, width=10)
-        self.btn_mic.pack(side="left", padx=(6, 4))
+        self.btn_mic = ttk.Button(bar, text="语音输入", command=on_voice, width=8)
+        self.btn_mic.pack(side="left", padx=(8, 4))
         # 喇叭电平表：灰色底座，蓝色从下往上填，只在录音时出现
         self.lvl = tk.Canvas(bar, width=SPEAKER_W, height=SPEAKER_H,
-                             highlightthickness=0, bd=0, bg=C_BG)
+                             highlightthickness=0, bd=0, bg=C_SURFACE)
         self._draw_level(0.0)
-        self.btn_copy = ttk.Button(bar, text="复制译文", command=on_copy, width=10)
-        self.btn_copy.pack(side="left", padx=4)
-        ttk.Button(bar, text="清空", command=self.clear_all, width=6).pack(side="left")
-        self.lbl_hint = ttk.Label(bar, text="Ctrl+Enter", style="Hint.TLabel")
-        self.lbl_hint.pack(side="right")
+        self.btn_clear = ttk.Button(bar, text="清空", command=self.clear_all,
+                                    style="Quiet.TButton", width=5)
+        self.btn_clear.pack(side="right")
+        self.lbl_hint = ttk.Label(pad, text="Ctrl+Enter 翻译", style="CardHint.TLabel")
+        self.lbl_hint.grid(row=3, column=0, sticky="w", pady=(6, 14))
 
-        ttk.Label(pad, text="译文", style="Hint.TLabel").grid(
-            row=3, column=0, sticky="w", padx=8, pady=(2, 2))
-        self.txt_out = tk.Text(pad, height=7, wrap="word", font=FONT_TEXT,
-                               relief="solid", borderwidth=1, bg=C_OUT_BG,
-                               highlightthickness=1, highlightbackground=C_LINE)
-        self.txt_out.grid(row=4, column=0, sticky="nsew", padx=8)
+        out_head = ttk.Frame(pad, style="Card.TFrame")
+        out_head.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        ttk.Label(out_head, text="发给对方" if side == "toPeer" else "对方的意思",
+                  style="CardHint.TLabel").pack(side="left")
+        self.btn_copy = ttk.Button(out_head, text="复制译文", command=on_copy,
+                                   style="Quiet.TButton", width=9)
+        self.btn_copy.pack(side="right")
+        surface, self.txt_out = text_surface(pad, height=6, bg=C_OUT_BG)
+        surface.grid(row=5, column=0, sticky="nsew")
         readonly_text(self.txt_out)
 
-        mem = ttk.Frame(pad)
-        mem.grid(row=5, column=0, sticky="nsew", padx=8, pady=(8, 8))
+        memory_head = ttk.Frame(pad, style="Card.TFrame")
+        memory_head.grid(row=6, column=0, sticky="ew", pady=(14, 0))
+        self.btn_memory = ttk.Button(memory_head, text="查看记忆  ▾",
+                                      style="Quiet.TButton", command=self.toggle_memory)
+        self.btn_memory.pack(side="left")
+        ttk.Label(memory_head, text="翻译完成后自动复制", style="CardHint.TLabel").pack(side="right")
+        self.memory_open = False
+        # 独立、非模态的历史窗口，查看记忆时仍能阅读和编辑译文。
+        self.memory_window = tk.Toplevel(self)
+        self.memory_window.withdraw()
+        self.memory_window.title("本侧会话记忆")
+        self.memory_window.configure(bg=C_SURFACE)
+        self.memory_window.transient(app)
+        self.memory_window.geometry("640x420")
+        self.memory_window.minsize(480, 320)
+        self.memory_window.protocol("WM_DELETE_WINDOW", self.toggle_memory)
+        self.memory_window.bind("<Escape>", lambda e: self.toggle_memory())
+        self.memory_panel = mem = ttk.Frame(self.memory_window, style="Card.TFrame", padding=18)
+        mem.pack(fill="both", expand=True)
         mem.columnconfigure(0, weight=1)
-        mem.rowconfigure(1, weight=0)
+        mem.rowconfigure(1, weight=1)
 
-        head = ttk.Frame(mem)
+        head = ttk.Frame(mem, style="Card.TFrame")
         head.grid(row=0, column=0, columnspan=2, sticky="ew")
-        self.lbl_mem = ttk.Label(head, text="本栏记忆", style="Hint.TLabel")
+        self.lbl_mem = ttk.Label(head, text="本栏记忆", style="CardHint.TLabel", wraplength=420)
         self.lbl_mem.pack(side="left")
-        ttk.Label(head, text="  双击一行可回填原文", style="Hint.TLabel").pack(side="left")
 
         cols = ("src", "out", "on")
         self.tree = ttk.Treeview(mem, columns=cols, show="headings",
-                                 selectmode="extended", height=6)
+                                 selectmode="extended", height=3)
         self.tree.heading("src", text="原文")
         self.tree.heading("out", text="译文")
         self.tree.heading("on", text="本次")
@@ -263,21 +284,33 @@ class Lane(ttk.Frame):
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.bind("<Double-1>", self._recall)
 
-        mbar = ttk.Frame(mem)
+        mbar = ttk.Frame(mem, style="Card.TFrame")
         mbar.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        ttk.Button(mbar, text="删掉选中", command=self.del_selected,
-                   width=10).pack(side="left")
+        ttk.Button(mbar, text="删除选中", command=self.del_selected,
+                   style="Quiet.TButton", width=8).pack(side="left")
         ttk.Button(mbar, text="清空本栏", command=self.clear_memory,
-                   width=9).pack(side="left", padx=4)
+                   style="Quiet.TButton", width=8).pack(side="left", padx=4)
         ttk.Button(mbar, text="复制选中原文", command=self.copy_selected_src,
-                   width=13).pack(side="left")
+                   style="Quiet.TButton", width=11).pack(side="left")
+        ttk.Label(mem, text="双击回填原文；可按住 Ctrl 多选", style="CardHint.TLabel").grid(
+            row=3, column=0, sticky="w", pady=(6, 0))
 
         self.txt_in.bind("<Control-Return>", lambda e: (on_translate(), "break")[1])
+
+    def toggle_memory(self):
+        self.memory_open = not self.memory_open
+        if self.memory_open:
+            self.memory_window.deiconify()
+            self.memory_window.lift()
+        else:
+            self.memory_window.withdraw()
+        self.refresh_memory()
 
     # — 标题 —
 
     def set_title(self, text):
         self.lbl_title.configure(text=text)
+        self.memory_window.title(text + " · 会话记忆")
 
     def set_pair(self, text):
         self.lbl_pair.configure(text=text)
@@ -302,22 +335,23 @@ class Lane(ttk.Frame):
         self.txt_out.delete("1.0", "end")
 
     def set_busy(self, busy):
-        self.btn_go.configure(state="disabled" if busy else "normal")
+        self.btn_go.configure(state="disabled" if busy else "normal",
+                              text="翻译中…" if busy else "翻译")
 
     def set_recording(self, on, elapsed=0.0):
         if on:
             self.btn_mic.configure(text="■ 停止")
             self._draw_level(0.0)
-            self.lvl.pack(side="left", padx=(0, 2), before=self.btn_copy)
+            self.lvl.pack(side="left", padx=(0, 2), after=self.btn_mic)
             self.lbl_hint.configure(text="0.0s   Esc 取消")
         else:
-            self.btn_mic.configure(text="🎤 说话")
+            self.btn_mic.configure(text="语音输入")
             self._draw_level(0.0)
             try:
                 self.lvl.pack_forget()          # 录完收起来，别留个空条
             except Exception:
                 pass
-            self.lbl_hint.configure(text="Ctrl+Enter")
+            self.lbl_hint.configure(text="Ctrl+Enter 翻译")
 
     def _draw_level(self, v):
         draw_level(self.lvl, v, self.accent)
@@ -349,6 +383,8 @@ class Lane(ttk.Frame):
         self.lbl_mem.configure(
             text="本栏记忆  已积累 %d 条 · 本次带 %d 条 / %d 字"
                  % (len(arr), len(active), chars))
+        self.btn_memory.configure(text="%s记忆 %d 条" % (
+            "关闭" if self.memory_open else "查看", len(arr)))
 
     def _recall(self, _e=None):
         sel = self.tree.selection()
@@ -710,7 +746,16 @@ class SettingsDialog(tk.Toplevel):
 
 class App(tk.Tk):
     def __init__(self):
+        # 源码运行时也使用自己的任务栏身份，避免沿用 Python 的图标。
+        try:
+            set_id = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+            set_id.argtypes = [ctypes.c_wchar_p]
+            set_id.restype = ctypes.c_long
+            set_id("NeoHotaru.PretendForeigner.Translator")
+        except (AttributeError, OSError):
+            pass
         super().__init__()
+        apply_app_icon(self)
         setup_style(self)
         self.title(WINDOW_TITLE)
         self.configure(bg=C_BG)
@@ -839,97 +884,93 @@ class App(tk.Tk):
     # ── 界面 ──
 
     def _build_ui(self):
-        head = ttk.Frame(self, padding=(12, 10, 12, 6))
-        head.pack(fill="x")
+        self.minsize(1120, 740)
+        shell = ttk.Frame(self)
+        shell.pack(fill="both", expand=True)
+        sidebar = ttk.Frame(shell, style="Side.TFrame", width=230, padding=(20, 24))
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
+        brand = ttk.Frame(sidebar, style="Side.TFrame")
+        brand.pack(fill="x")
+        tk.Label(brand, image=self._app_icon_images[0], bg=C_SIDEBAR).pack(side="left", padx=(0, 8))
+        ttk.Label(brand, text="假装外国人", style="Side.TLabel",
+                  font=("Microsoft YaHei UI", 17, "bold")).pack(side="left")
+        ttk.Label(sidebar, text="把话说成你的样子", style="SideHint.TLabel").pack(
+            anchor="w", pady=(6, 30))
 
-        r1 = ttk.Frame(head)
-        r1.pack(fill="x")
-        ttk.Label(r1, text="会话", style="Head.TLabel").pack(side="left")
-        self.cb_sess = ttk.Combobox(r1, width=20, state="readonly")
-        self.cb_sess.pack(side="left", padx=(6, 6))
+        ttk.Label(sidebar, text="当前会话", style="Side.TLabel").pack(anchor="w")
+        self.cb_sess = ttk.Combobox(sidebar, width=16, state="readonly")
+        self.cb_sess.pack(fill="x", pady=(8, 8))
         self.cb_sess.bind("<<ComboboxSelected>>", self.on_switch_session)
-        ttk.Button(r1, text="新建", width=6, command=self.on_new_session).pack(side="left")
-        ttk.Button(r1, text="重命名", width=8,
-                   command=self.on_rename_session).pack(side="left", padx=3)
-        ttk.Button(r1, text="删除", width=6, command=self.on_del_session).pack(side="left")
+        ttk.Button(sidebar, text="新建会话", command=self.on_new_session).pack(fill="x")
+        row = ttk.Frame(sidebar, style="Side.TFrame")
+        row.pack(fill="x", pady=(6, 0))
+        ttk.Button(row, text="重命名", style="Side.TButton", command=self.on_rename_session).pack(side="left")
+        ttk.Button(row, text="删除", style="Side.TButton", command=self.on_del_session).pack(side="right")
 
-        ttk.Separator(r1, orient="vertical").pack(side="left", fill="y", padx=12)
+        ttk.Separator(sidebar).pack(fill="x", pady=22)
+        ttk.Label(sidebar, text="语境与术语", style="Side.TLabel").pack(anchor="w")
+        self.v_note = tk.StringVar()
+        note = ttk.Entry(sidebar, textvariable=self.v_note)
+        note.pack(fill="x", pady=(8, 8))
+        note.bind("<FocusOut>", lambda e: self.on_note_change())
+        note.bind("<Return>", lambda e: self.on_note_change())
+        ttk.Label(sidebar, text="例如：埋点 = event tracking\n仅用于当前会话", style="SideHint.TLabel",
+                  justify="left", wraplength=190).pack(anchor="w")
+        self.v_depth = tk.StringVar()
+        self.v_budget = tk.StringVar()
+        self.v_cross = tk.StringVar()
+        ttk.Button(sidebar, text="调整上下文记忆…", style="Side.TButton",
+                   command=self.open_context_settings).pack(fill="x", pady=(12, 0))
 
-        ttk.Label(r1, text="后端", style="Head.TLabel").pack(side="left")
-        self.cb_backend = ttk.Combobox(r1, width=26, state="readonly")
-        self.cb_backend.pack(side="left", padx=(6, 6))
+        bottom = ttk.Frame(sidebar, style="Side.TFrame")
+        bottom.pack(side="bottom", fill="x")
+        ttk.Label(bottom, text="翻译引擎", style="Side.TLabel").pack(anchor="w")
+        self.cb_backend = ttk.Combobox(bottom, width=16, state="readonly")
+        self.cb_backend.pack(fill="x", pady=(8, 8))
         self.cb_backend.bind("<<ComboboxSelected>>", self.on_backend_change)
-        ttk.Button(r1, text="设置", width=6, command=self.open_settings).pack(side="left")
-        ttk.Button(r1, text="悬浮窗", width=8,
-                   command=self.toggle_overlay).pack(side="left", padx=(4, 0))
+        self.lbl_engine = ttk.Label(bottom, text="", style="SideHint.TLabel", wraplength=190,
+                                    justify="left")
+        self.lbl_engine.pack(anchor="w", pady=(0, 10))
+        ttk.Button(bottom, text="引擎与应用设置", command=self.open_settings).pack(fill="x")
 
-        ttk.Separator(r1, orient="vertical").pack(side="left", fill="y", padx=12)
+        workspace = ttk.Frame(shell, padding=(24, 22, 24, 14))
+        workspace.pack(side="left", fill="both", expand=True)
+        heading = ttk.Frame(workspace)
+        heading.pack(fill="x")
+        ttk.Button(heading, text="打开悬浮窗", command=self.toggle_overlay).pack(side="right")
+        ttk.Label(heading, text="双向翻译", style="Title.TLabel").pack(side="left")
+        ttk.Label(workspace, text="两边各记各的话，延续各自的表达习惯。",
+                  style="Hint.TLabel").pack(anchor="w", pady=(5, 20))
 
-        ttk.Label(r1, text="语气", style="Head.TLabel").pack(side="left")
-        self.cb_mode = ttk.Combobox(r1, width=13, state="readonly",
-                                    values=["自动判断", "精确 precise", "闲聊 casual"])
-        self.cb_mode.pack(side="left", padx=(6, 0))
+        controls = ttk.Frame(workspace)
+        controls.pack(fill="x", pady=(0, 18))
+        for col in (0, 2):
+            controls.columnconfigure(col, weight=1)
+        my = ttk.Frame(controls)
+        my.grid(row=0, column=0, sticky="ew")
+        ttk.Label(my, text="我的语言", style="Hint.TLabel").pack(anchor="w", pady=(0, 6))
+        self.cb_mine = ttk.Combobox(my, width=16, state="readonly", values=[n for _, n in LANGS])
+        self.cb_mine.pack(fill="x")
+        self.cb_mine.bind("<<ComboboxSelected>>", lambda e: self.on_langs_change())
+        ttk.Label(controls, text="⇄", foreground=C_MUTED, font=("Segoe UI", 18)).grid(
+            row=0, column=1, padx=16, pady=(20, 0))
+        peer = ttk.Frame(controls)
+        peer.grid(row=0, column=2, sticky="ew")
+        ttk.Label(peer, text="对方语言", style="Hint.TLabel").pack(anchor="w", pady=(0, 6))
+        self.cb_peer = ttk.Combobox(peer, width=16, state="readonly", values=[n for _, n in LANGS])
+        self.cb_peer.pack(fill="x")
+        self.cb_peer.bind("<<ComboboxSelected>>", lambda e: self.on_langs_change())
+        mode = ttk.Frame(controls)
+        mode.grid(row=0, column=3, sticky="ew", padx=(24, 0))
+        ttk.Label(mode, text="表达语气", style="Hint.TLabel").pack(anchor="w", pady=(0, 6))
+        self.cb_mode = ttk.Combobox(mode, width=13, state="readonly",
+                                   values=["自动判断", "精确 precise", "闲聊 casual"])
+        self.cb_mode.pack(fill="x")
         self.cb_mode.bind("<<ComboboxSelected>>", lambda e: self.on_mode_change())
 
-        r2 = ttk.Frame(head)
-        r2.pack(fill="x", pady=(8, 0))
-
-        ttk.Label(r2, text="我的语言").pack(side="left")
-        self.cb_mine = ttk.Combobox(r2, width=15, state="readonly",
-                                    values=[n for _, n in LANGS])
-        self.cb_mine.pack(side="left", padx=(6, 0))
-        self.cb_mine.bind("<<ComboboxSelected>>", lambda e: self.on_langs_change())
-
-        ttk.Label(r2, text="对方语言").pack(side="left", padx=(12, 0))
-        self.cb_peer = ttk.Combobox(r2, width=15, state="readonly",
-                                    values=[n for _, n in LANGS])
-        self.cb_peer.pack(side="left", padx=(6, 0))
-        self.cb_peer.bind("<<ComboboxSelected>>", lambda e: self.on_langs_change())
-
-        ttk.Separator(r2, orient="vertical").pack(side="left", fill="y", padx=12)
-
-        ttk.Label(r2, text="记忆").pack(side="left")
-        self.v_depth = tk.StringVar()
-        sp = ttk.Spinbox(r2, from_=MEM_MIN, to=MEM_MAX, width=4, textvariable=self.v_depth,
-                         command=self.on_depth_change)
-        sp.pack(side="left", padx=(6, 2))
-        sp.bind("<FocusOut>", lambda e: self.on_depth_change())
-        sp.bind("<Return>", lambda e: self.on_depth_change())
-        ttk.Label(r2, text="条 /").pack(side="left")
-
-        self.v_budget = tk.StringVar()
-        sp2 = ttk.Spinbox(r2, from_=BUDGET_MIN // BUDGET_STEP, to=BUDGET_MAX // BUDGET_STEP,
-                          width=4, textvariable=self.v_budget, command=self.on_budget_change)
-        sp2.pack(side="left", padx=(4, 2))
-        sp2.bind("<FocusOut>", lambda e: self.on_budget_change())
-        sp2.bind("<Return>", lambda e: self.on_budget_change())
-        ttk.Label(r2, text="千字以内").pack(side="left")
-
-        ttk.Label(r2, text=" / 参照对方").pack(side="left", padx=(8, 0))
-        self.v_cross = tk.StringVar()
-        sp3 = ttk.Spinbox(r2, from_=0, to=20, width=3, textvariable=self.v_cross,
-                          command=self.on_cross_change)
-        sp3.pack(side="left", padx=(4, 2))
-        sp3.bind("<FocusOut>", lambda e: self.on_cross_change())
-        sp3.bind("<Return>", lambda e: self.on_cross_change())
-        ttk.Label(r2, text="条").pack(side="left")
-
-        ttk.Separator(r2, orient="vertical").pack(side="left", fill="y", padx=12)
-
-        ttk.Label(r2, text="语境 / 术语").pack(side="left")
-        self.v_note = tk.StringVar()
-        e = ttk.Entry(r2, textvariable=self.v_note)
-        e.pack(side="left", fill="x", expand=True, padx=(6, 0))
-        e.bind("<FocusOut>", lambda ev: self.on_note_change())
-        e.bind("<Return>", lambda ev: self.on_note_change())
-
-        ttk.Separator(self, orient="horizontal").pack(fill="x")
-
-        body = ttk.Frame(self, padding=(12, 10, 12, 6))
-        body.pack(fill="both", expand=True)
-        self.paned = ttk.PanedWindow(body, orient="horizontal")
+        self.paned = ttk.PanedWindow(workspace, orient="horizontal")
         self.paned.pack(fill="both", expand=True)
-
         self.lane_mine = Lane(self.paned, "toPeer", C_MINE,
                               self.on_translate_mine, self.on_copy_mine,
                               lambda: self.toggle_voice(self.lane_mine), self)
@@ -939,15 +980,61 @@ class App(tk.Tk):
         self.paned.add(self.lane_mine, weight=1)
         self.paned.add(self.lane_peer, weight=1)
 
-        ttk.Separator(self, orient="horizontal").pack(fill="x")
-        foot = ttk.Frame(self, padding=(12, 6, 12, 10))
-        foot.pack(fill="x")
-        self.lbl_status = ttk.Label(foot, text="就绪", style="Status.TLabel")
-        self.lbl_status.pack(side="left")
-        ttk.Button(foot, text="交换左右内容", width=13,
+        foot = ttk.Frame(workspace)
+        foot.pack(side="bottom", fill="x", pady=(12, 0))
+        ttk.Button(foot, text="交换内容", style="Quiet.TButton",
                    command=self.on_swap_sides).pack(side="right")
-        ttk.Button(foot, text="清空输入输出", width=13,
-                   command=self.on_clear_both).pack(side="right", padx=6)
+        ttk.Button(foot, text="清空两栏", style="Quiet.TButton",
+                   command=self.on_clear_both).pack(side="right", padx=(0, 6))
+        self.lbl_status = ttk.Label(foot, text="就绪", style="Status.TLabel",
+                                    wraplength=620, justify="left")
+        self.lbl_status.pack(side="left", fill="x", expand=True)
+        foot.bind("<Configure>", lambda e: self.lbl_status.configure(
+            wraplength=max(260, e.width - 230)))
+        # 先给状态栏留位置，再让编辑区占据剩余空间。
+        self.paned.pack_forget()
+        self.paned.pack(fill="both", expand=True)
+        self.paned.bind("<ButtonRelease-1>", lambda e: self._limit_sash())
+
+    def open_context_settings(self):
+        existing = getattr(self, "context_dialog", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            return
+        dialog = self.context_dialog = tk.Toplevel(self)
+        dialog.title("上下文记忆")
+        dialog.configure(bg=C_BG)
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        body = ttk.Frame(dialog, padding=24)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="上下文记忆", style="Head.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        ttk.Label(body, text="两条记忆线分别保留自己的用词与语气。",
+                  style="Hint.TLabel").grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 18))
+        fields = [("每侧带入的记忆条数", self.v_depth, MEM_MIN, MEM_MAX, self.on_depth_change),
+                  ("上下文字数上限（千字）", self.v_budget, BUDGET_MIN // BUDGET_STEP,
+                   BUDGET_MAX // BUDGET_STEP, self.on_budget_change),
+                  ("参照对方最近几条", self.v_cross, 0, 20, self.on_cross_change)]
+        for row, (label, variable, low, high, callback) in enumerate(fields, 2):
+            ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", pady=7)
+            spin = ttk.Spinbox(body, from_=low, to=high, textvariable=variable,
+                               width=7, command=callback)
+            spin.grid(row=row, column=1, padx=(24, 0), pady=7)
+            spin.bind("<FocusOut>", lambda e, c=callback: c())
+            spin.bind("<Return>", lambda e, c=callback: c())
+        ttk.Label(body, text="参照对方只用于理解指代；设为 0 可关闭。\n免费机翻不使用上下文和术语。",
+                  style="Hint.TLabel").grid(row=5, column=0, columnspan=2, sticky="w", pady=(16, 20))
+        def finish():
+            self.on_depth_change()
+            self.on_budget_change()
+            self.on_cross_change()
+            self.sync_views()
+            dialog.destroy()
+        ttk.Button(body, text="完成", style="Go.TButton", command=finish).grid(
+            row=6, column=1, sticky="e")
+        dialog.protocol("WM_DELETE_WINDOW", finish)
+        dialog.bind("<Escape>", lambda e: finish())
 
     def _restore_geometry(self):
         cfg = self.t.config
@@ -975,9 +1062,9 @@ class App(tk.Tk):
                 self.after(80, self._apply_sash)
             return
 
-        # 只接受 20%-80% 之间的值，其余一律回到正中间。
+        # 两栏都留出容纳常用操作的宽度，其余位置回到正中间。
         # 存的值超出当前宽度、或分栏线被拖到边上，都在这里兜住。
-        lo, hi = int(w * 0.2), int(w * 0.8)
+        lo, hi = min(360, w // 2), max(w - 360, w // 2)
         want = self._want_sash
         if want is None or want < lo or want > hi:
             want = w // 2
@@ -985,6 +1072,12 @@ class App(tk.Tk):
             self.paned.sashpos(0, want)
         except Exception:
             pass
+
+    def _limit_sash(self):
+        w = self.paned.winfo_width()
+        if w > 50:
+            self.paned.sashpos(0, max(min(360, w // 2),
+                min(self.paned.sashpos(0), max(w - 360, w // 2))))
 
     # ── 后端 ──
 
@@ -995,11 +1088,19 @@ class App(tk.Tk):
         want = self.t.active_backend()
         self.cb_backend.current(self.backend_keys.index(want)
                                 if want in self.backend_keys else 0)
+        self._refresh_engine_hint()
+
+    def _refresh_engine_hint(self):
+        if self.t.active_backend() == "google":
+            self.lbl_engine.configure(text="需能访问 Google\n不使用语气、记忆或术语")
+        else:
+            self.lbl_engine.configure(text="使用当前会话的语境与记忆")
 
     def on_backend_change(self, _e=None):
         i = self.cb_backend.current()
         if 0 <= i < len(self.backend_keys):
             self.t.set_backend(self.backend_keys[i])
+            self._refresh_engine_hint()
 
     def on_mode_change(self):
         self.t.set_mode(MODE_CODES[self.cb_mode.current()])
@@ -1219,6 +1320,9 @@ class App(tk.Tk):
     # ── 翻译 ──
 
     def translate_lane(self, lane):
+        if self.busy:
+            self.status("正在翻译，请稍候")
+            return
         text = lane.get_input()
         if not text:
             self.status("这一栏还没有内容")
@@ -1235,7 +1339,7 @@ class App(tk.Tk):
             try:
                 r = self.t.translate(text, lane.side)
             except Exception as e:
-                self.after(0, lambda: (self._finish(lane), self._on_fail(e)))
+                self.after(0, lambda error=e: (self._finish(lane), self._on_fail(error, lane)))
             else:
                 self.after(0, lambda: (self._finish(lane), self._on_done(lane, r)))
 
@@ -1243,19 +1347,21 @@ class App(tk.Tk):
 
     def _on_done(self, lane, r):
         lane.set_output(r["text"])
+        mode = {"literal": "机翻", "precise": "精确", "casual": "闲聊", "auto": "自动"}.get(
+            r["mode"], r["mode"])
         lane.set_pair("%s → %s  ·  %s" % (lang_name(r["source"]), lang_name(r["target"]),
-                                          r["mode"]))
+                                          mode))
         lane.refresh_memory()
         self.sync_views()
         self.clipboard_clear()
         self.clipboard_append(r["text"])
-        self.status("完成 %.1fs · %s→%s / %s · 已复制 · 本栏记忆 %d 条 / %d 字 · 参照对方 %d 条（本栏共 %d 条）"
-                    % (r["elapsed"], lang_name(r["source"]), lang_name(r["target"]),
-                       r["mode"], r["ctx_count"], r["ctx_chars"], r["cross_count"],
-                       r["memory_count"]), "ok")
+        self.status("译文已复制 · %.1f 秒 · %s → %s" % (
+            r["elapsed"], lang_name(r["source"]), lang_name(r["target"])), "ok")
 
-    def _on_fail(self, e):
+    def _on_fail(self, e, lane=None):
         self.status("失败：%s" % e, "bad")
+        if lane is not None and hasattr(lane, "flash"):
+            lane.flash("翻译失败：%s" % e)
 
     def _finish(self, lane):
         self.busy = max(0, self.busy - 1)
@@ -1304,14 +1410,13 @@ class App(tk.Tk):
             self.overlay = OverlayPanel(self, side=self._last_overlay_side())
             self.overlay.protocol("WM_DELETE_WINDOW", self.overlay.close)
         if self.overlay.winfo_viewable():
-            self.overlay.withdraw()
+            self.overlay.hide()
             from overlay import toggle_key_name
             self.status("悬浮窗已隐藏（%s 可再叫出来）" % toggle_key_name(self))
         else:
-            self.overlay.deiconify()
-            self.overlay.lift()
+            self.overlay.show()
             self.overlay.refresh_memory()
-            self.status("悬浮窗已显示")
+            self.status("悬浮岛已显示，点击胶囊展开翻译")
 
     def _last_overlay_side(self):
         return self.t.config.get("overlaySide", "toPeer")
@@ -1320,7 +1425,7 @@ class App(tk.Tk):
         """快捷键入口：没开悬浮窗就先开，再翻剪贴板。"""
         if getattr(self, "overlay", None) is None or not self.overlay.winfo_viewable():
             self.toggle_overlay()
-        self.overlay.after(120, self.overlay.translate_clipboard)
+        self.overlay.translate_clipboard()
 
     def sync_views(self):
         """任何一边翻完都刷新另一边的显示，免得两边对不上。"""

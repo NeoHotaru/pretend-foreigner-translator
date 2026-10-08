@@ -24,13 +24,16 @@ import time
 import tkinter as tk
 from ctypes import wintypes
 from tkinter import ttk, simpledialog, messagebox
+from island_window import (IslandWindow, ISLAND_BG, ISLAND_FIELD, ISLAND_TEXT,
+                           ISLAND_MUTED, ISLAND_LINE, PILL_SIZE)
 
 from ui_kit import (C_BG, C_LINE, C_MINE, C_MUTED, C_OUT_BG, C_PEER,
-                    SPEAKER_H, SPEAKER_W, draw_level, norm_level, readonly_text)
+                    C_TEXT, C_SURFACE, FONT_UI, FONT_SMALL, FONT_HEAD,
+                    SPEAKER_H, SPEAKER_W, draw_level, norm_level, readonly_text, text_surface, brand_icon)
 
-FONT = ("Microsoft YaHei UI", 10)
-FONT_S = ("Microsoft YaHei UI", 9)
-FONT_B = ("Microsoft YaHei UI", 10, "bold")
+FONT = FONT_UI
+FONT_S = FONT_SMALL
+FONT_B = FONT_HEAD
 
 ALPHAS = [1.0, 0.92, 0.85, 0.75]
 
@@ -138,7 +141,7 @@ class HotkeyThread(threading.Thread):
 
 # ───────────────────────── 悬浮面板 ─────────────────────────
 
-class OverlayPanel(tk.Toplevel):
+class OverlayPanel(IslandWindow):
     """紧凑的置顶面板。对外表现得像一个 Lane。"""
 
     def __init__(self, app, side="toPeer"):
@@ -149,11 +152,14 @@ class OverlayPanel(tk.Toplevel):
         self._drag = (0, 0)
         self._alpha_i = 0
         self._rec_elapsed = 0.0
+        self._busy = False
+        self._recording = False
+        self._flash_id = None
 
         self.title("假装外国人 · 悬浮")
         self.overrideredirect(True)           # 去掉标题栏，才像浮层
         self.attributes("-topmost", True)
-        self.configure(bg=C_LINE)
+        self.configure(bg=ISLAND_BG)
 
         cfg = self.t.config
         self._alpha_i = 0
@@ -169,131 +175,169 @@ class OverlayPanel(tk.Toplevel):
 
     # ── 外观 ──
 
+    def _quiet_button(self, master, text, command, **kwargs):
+        return tk.Button(master, text=text, command=command, font=FONT_S,
+                         bg=ISLAND_BG, fg=ISLAND_MUTED, activebackground="#2c3440",
+                         activeforeground=ISLAND_TEXT, relief="flat", bd=0,
+                         padx=8, pady=7, cursor="hand2", **kwargs)
+
     def _build(self):
-        outer = tk.Frame(self, bg=C_LINE)
-        outer.pack(fill="both", expand=True, padx=1, pady=1)
-        body = tk.Frame(outer, bg=C_BG)
-        body.pack(fill="both", expand=True)
+        self._pill = tk.Frame(self, bg=ISLAND_BG, takefocus=True, cursor="hand2")
+        self._pill_icon = brand_icon(self, 24)
+        logo = tk.Label(self._pill, image=self._pill_icon, bg=ISLAND_BG, cursor="hand2")
+        logo.pack(side="left", padx=(17, 9))
+        self.pill_title = tk.Label(self._pill, text="假装外国人", font=FONT,
+                                   bg=ISLAND_BG, fg=ISLAND_TEXT, cursor="hand2")
+        self.pill_title.pack(side="left")
+        self.pill_status = tk.Label(self._pill, text="⇄", font=("Segoe UI", 11),
+                                    bg=ISLAND_BG, fg="#73cbbb", cursor="hand2", width=6)
+        self.pill_status.pack(side="right", padx=(0, 13))
+        for widget in (self._pill, logo, self.pill_title, self.pill_status):
+            self.bind_drag(widget, activates=True)
+            widget.bind("<Button-3>", self._context_menu)
+        self._pill.bind("<Return>", lambda e: self.expand(animate=False))
+        self._pill.bind("<space>", lambda e: self.expand(animate=False))
 
-        # 标题栏（拖这里移动）
-        bar = tk.Frame(body, bg=C_MINE)
-        bar.pack(fill="x")
+        self._panel = tk.Frame(self, bg=ISLAND_BG)
+        body = tk.Frame(self._panel, bg=ISLAND_BG)
+        body.pack(fill="both", expand=True, padx=22, pady=18)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(4, weight=1)
+        body.rowconfigure(7, weight=1)
+        bar = tk.Frame(body, bg=ISLAND_BG)
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.btn_collapse = self._quiet_button(bar, "收起", self.close)
+        self.btn_collapse.pack(side="right")
+        self._quiet_button(bar, "主界面", self.open_main).pack(side="right")
+        self._brand_icon = brand_icon(self, 24)
+        self.lbl_title = tk.Label(bar, text="假装外国人", bg=ISLAND_BG, fg=ISLAND_TEXT,
+                                  image=self._brand_icon, compound="left", padx=5,
+                                  font=FONT_B, anchor="w", cursor="fleur")
+        self.lbl_title.pack(side="left", fill="x", expand=True)
+        for widget in (bar, self.lbl_title):
+            self.bind_drag(widget)
 
-        # 先 pack 右边的：它们拿固定宽度，剩下的才给标题。
-        # 反过来（标题先 pack）标题会先占掉自然宽度，右边几个被挤到重叠。
-        for txt, cmd, tip in [("×", self.close, "关掉悬浮窗"),
-                              ("◐", self.cycle_alpha, "透明度"),
-                              ("⤢", self.open_main, "打开主窗口")]:
-            b = tk.Label(bar, text=txt, bg=C_MINE, fg="#dfe7fb", font=FONT_S,
-                         padx=6, cursor="hand2")
-            b.pack(side="right")
-            b.bind("<Button-1>", lambda e, c=cmd: c())
-        # 会话下拉。注意不能给它绑拖动，否则点一下变成拖窗口、菜单打不开。
-        self.btn_sess = tk.Menubutton(bar, text="会话", bg=C_MINE, fg="#eaf0ff",
-                                      activebackground="#1d4ed8", activeforeground="white",
-                                      font=FONT_S, relief="flat", padx=6, pady=0,
-                                      cursor="hand2",
-                                      indicatoron=False,   # 自带的小方块跟主题不搭，用文字里的 ▾
-                                      highlightthickness=0, borderwidth=0)
-        self.btn_sess.pack(side="right", padx=(4, 2))
+        session = tk.Frame(body, bg=ISLAND_BG)
+        session.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        self.btn_sess = tk.Menubutton(session, text="会话", bg=ISLAND_BG, fg=ISLAND_MUTED,
+                                      activebackground="#2c3440", activeforeground=ISLAND_TEXT,
+                                      font=FONT_S, relief="flat", padx=5, pady=5,
+                                      cursor="hand2", indicatoron=False, bd=0,
+                                      highlightthickness=0, anchor="w", takefocus=True)
+        self.btn_sess.pack(side="left", fill="x", expand=True)
         self.menu_sess = tk.Menu(self.btn_sess, tearoff=0, font=FONT_S)
         self.btn_sess.configure(menu=self.menu_sess)
+        tk.Label(session, text="两边各记各的话", font=FONT_S,
+                 bg=ISLAND_BG, fg=ISLAND_MUTED).pack(side="right")
 
-        # 标题最后 pack，吃掉剩下的宽度（会话名太长也只是被挤窄，不会顶掉按钮）
-        self.lbl_title = tk.Label(bar, text="假装外国人", bg=C_MINE, fg="#ffffff",
-                                  font=FONT_B, anchor="w", padx=8, pady=3)
-        self.lbl_title.pack(side="left", fill="x", expand=True)
+        sw = tk.Frame(body, bg=ISLAND_FIELD, padx=3, pady=3)
+        sw.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        self.btn_a = tk.Button(sw, text="我 → 对方", font=FONT_S, relief="flat", bd=0,
+                               padx=12, pady=8, cursor="hand2", command=lambda: self.set_side("toPeer"))
+        self.btn_a.pack(side="left", fill="x", expand=True)
+        self.btn_b = tk.Button(sw, text="对方 → 我", font=FONT_S, relief="flat", bd=0,
+                               padx=12, pady=8, cursor="hand2", command=lambda: self.set_side("fromPeer"))
+        self.btn_b.pack(side="left", fill="x", expand=True, padx=(3, 0))
 
-        # 只有这几个地方能拖动窗口
-        for w in (bar, self.lbl_title):
-            w.bind("<Button-1>", self._drag_start)
-            w.bind("<B1-Motion>", self._drag_move)
-            w.bind("<ButtonRelease-1>", self._drag_end)
-
-        # 方向切换
-        sw = tk.Frame(body, bg=C_BG)
-        sw.pack(fill="x", padx=6, pady=(6, 0))
-        self.btn_a = tk.Button(sw, text="我 → 对方", font=FONT_S, relief="flat",
-                               command=lambda: self.set_side("toPeer"))
-        self.btn_a.pack(side="left")
-        self.btn_b = tk.Button(sw, text="对方 → 我", font=FONT_S, relief="flat",
-                               command=lambda: self.set_side("fromPeer"))
-        self.btn_b.pack(side="left", padx=4)
-        self.btn_clip = tk.Button(sw, text="剪贴板", font=FONT_S, relief="flat",
-                                  command=self.translate_clipboard)
+        input_head = tk.Frame(body, bg=ISLAND_BG)
+        input_head.grid(row=3, column=0, sticky="ew", pady=(0, 6))
+        self.lbl_input = tk.Label(input_head, text="你的原话", font=FONT_S,
+                                  bg=ISLAND_BG, fg=ISLAND_MUTED)
+        self.lbl_input.pack(side="left")
+        self.btn_clip = self._quiet_button(input_head, "翻译剪贴板", self.translate_clipboard)
         self.btn_clip.pack(side="right")
 
-        # 输入
-        self.txt_in = tk.Text(body, height=4, wrap="word", font=FONT,
-                              relief="solid", borderwidth=1, undo=True,
-                              highlightthickness=0)
-        self.txt_in.pack(fill="both", expand=True, padx=6, pady=(6, 0))
-
-        # 按钮行
-        rb = tk.Frame(body, bg=C_BG)
-        rb.pack(fill="x", padx=6, pady=4)
-        self.btn_go = tk.Button(rb, text="翻译", font=FONT, bg=C_MINE, fg="white",
-                                activebackground="#1d4ed8", activeforeground="white",
-                                relief="flat", padx=12, command=self.do_translate)
-        self.btn_go.pack(side="left")
-        self.btn_mic = tk.Button(rb, text="🎤 说话", font=FONT_S, relief="flat",
-                                 command=self.toggle_voice)
-        self.btn_mic.pack(side="left", padx=4)
-        self.lvl = tk.Canvas(rb, width=SPEAKER_W, height=SPEAKER_H,
-                             highlightthickness=0, bd=0, bg=C_BG)
-        draw_level(self.lvl, 0.0, C_MINE)
-        self.btn_copy = tk.Button(rb, text="复制", font=FONT_S, relief="flat",
-                                  command=self.copy_out)
-        self.btn_copy.pack(side="left", padx=4)
-        self.lbl_hint = tk.Label(rb, text="", bg=C_BG, fg=C_MUTED, font=FONT_S)
-        self.lbl_hint.pack(side="right")
-
-        # 译文
-        self.txt_out = tk.Text(body, height=4, wrap="word", font=FONT,
-                               relief="solid", borderwidth=1, bg=C_OUT_BG,
-                               highlightthickness=0)
-        self.txt_out.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+        self.lbl_hint = tk.Label(body, text="Ctrl+Enter 翻译", bg=ISLAND_BG, fg=ISLAND_MUTED,
+                                 font=FONT_S, anchor="w", wraplength=374, justify="left")
+        self.lbl_hint.grid(row=8, column=0, sticky="ew", pady=(8, 0))
+        output_surface, self.txt_out = self._text_area(body, undo=False)
+        output_surface.grid(row=7, column=0, sticky="nsew")
         readonly_text(self.txt_out)
+        out_head = tk.Frame(body, bg=ISLAND_BG)
+        out_head.grid(row=6, column=0, sticky="ew", pady=(6, 6))
+        self.lbl_output = tk.Label(out_head, text="发给对方", font=FONT_S,
+                                   bg=ISLAND_BG, fg=ISLAND_MUTED)
+        self.lbl_output.pack(side="left")
+        self.btn_copy = self._quiet_button(out_head, "复制译文", self.copy_out)
+        self.btn_copy.pack(side="right")
+
+        rb = tk.Frame(body, bg=ISLAND_BG)
+        rb.grid(row=5, column=0, sticky="ew", pady=(12, 0))
+        self.btn_go = ttk.Button(rb, text="翻译", style="Go.TButton", width=6, command=self.do_translate)
+        self.btn_go.pack(side="left")
+        self.btn_mic = self._quiet_button(rb, "语音输入", self.toggle_voice)
+        self.btn_mic.pack(side="left", padx=(8, 0))
+        self.lvl = tk.Canvas(rb, width=SPEAKER_W, height=SPEAKER_H,
+                             highlightthickness=0, bd=0, bg=ISLAND_BG)
+        draw_level(self.lvl, 0.0, C_MINE)
+        input_surface, self.txt_in = self._text_area(body, undo=True)
+        input_surface.grid(row=4, column=0, sticky="nsew")
 
         self.txt_in.bind("<Control-Return>", lambda e: (self.do_translate(), "break")[1])
-        self.txt_in.bind("<Escape>", lambda e: self.withdraw())
-
+        self.bind("<Escape>", self._escape)
         self.update_side_buttons()
         self.refresh_session_label()
 
+    def _text_area(self, master, undo):
+        frame, widget = text_surface(master, height=4, font=FONT, undo=undo,
+                                     bg=ISLAND_FIELD, fg=ISLAND_TEXT,
+                                     insertbackground=ISLAND_TEXT, selectforeground="white")
+        frame.configure(highlightbackground=ISLAND_LINE)
+        widget.bind("<FocusOut>", lambda e: frame.configure(highlightbackground=ISLAND_LINE), add="+")
+        style = ttk.Style(self)
+        style.configure("Island.Vertical.TScrollbar", background="#3a4555", troughcolor=ISLAND_FIELD,
+                        arrowcolor=ISLAND_MUTED, borderwidth=0)
+        for child in frame.winfo_children():
+            if isinstance(child, ttk.Scrollbar):
+                child.configure(style="Island.Vertical.TScrollbar")
+        return frame, widget
+
     def _restore_pos(self):
         cfg = self.t.config
-        pos = cfg.get("overlayPos")
-        w, h = 380, 330
-        if isinstance(pos, (list, tuple)) and len(pos) == 2:
-            x, y = int(pos[0]), int(pos[1])
+        pos = cfg.get("overlayIslandPos")
+        if not isinstance(pos, (list, tuple)) or len(pos) != 2:
+            old = cfg.get("overlayPos")
+            pos = [old[0] + (420 - PILL_SIZE[0]) / 2, old[1]] if isinstance(old, (list, tuple)) and len(old) == 2 else [self.winfo_screenwidth() - PILL_SIZE[0] - 24, 120]
+        try:
+            self.initialize_island([float(pos[0]), float(pos[1])])
+        except (TypeError, ValueError):
+            self.initialize_island([self.winfo_screenwidth() - PILL_SIZE[0] - 24, 120])
+
+    def _escape(self, _event=None):
+        if self.app.recording_target is not None:
+            self.app.cancel_recording()
         else:
-            sw = self.winfo_screenwidth()
-            x, y = sw - w - 24, 120
-        # 别跑到屏幕外面去
-        x = max(0, min(x, self.winfo_screenwidth() - 80))
-        y = max(0, min(y, self.winfo_screenheight() - 60))
-        self.geometry("%dx%d+%d+%d" % (w, h, x, y))
+            self.collapse(animate=False)
+        return "break"
 
-    # ── 拖动 / 吸边 ──
+    def _context_menu(self, event):
+        previous = getattr(self, "_island_menu", None)
+        if previous is not None:
+            previous.destroy()
+        menu = self._island_menu = tk.Menu(self, tearoff=0, font=FONT_S)
+        menu.add_command(label="收起翻译面板" if self.expanded else "展开翻译面板",
+                         command=self.toggle_expanded)
+        menu.add_command(label="翻译剪贴板", command=self.translate_clipboard)
+        menu.add_separator()
+        menu.add_command(label="返回主界面", command=self.open_main)
+        menu.add_command(label="调整透明度", command=self.cycle_alpha)
+        menu.add_command(label="隐藏悬浮岛", command=self.hide)
+        def dismissed(_event=None):
+            self._context_open = False
+            self._queue_focus_check()
+        menu.bind("<Unmap>", dismissed)
+        self._context_open = True
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
 
-    def _drag_start(self, e):
-        self._drag = (e.x_root - self.winfo_x(), e.y_root - self.winfo_y())
-
-    def _drag_move(self, e):
-        self.geometry("+%d+%d" % (e.x_root - self._drag[0], e.y_root - self._drag[1]))
-
-    def _drag_end(self, _e=None):
-        x, y = self.winfo_x(), self.winfo_y()
-        sw = self.winfo_screenwidth()
-        margin = 24
-        if x <= margin:
-            x = 0
-        elif x + self.winfo_width() >= sw - margin:
-            x = sw - self.winfo_width()
-        self.geometry("+%d+%d" % (x, y))
-        self.t.config["overlayPos"] = [x, y]
-        self.t.save_config()
+    def _update_pill(self, message=None):
+        if self._recording:
+            message = "录音"
+        elif self._busy:
+            message = "翻译中"
+        self.pill_status.configure(text=message or "⇄")
 
     # ── 标题栏动作 ──
 
@@ -306,6 +350,7 @@ class OverlayPanel(tk.Toplevel):
         except Exception:
             pass
         self.refresh_session_label()
+        self.collapse(animate=False)
 
     def cycle_alpha(self):
         self._alpha_i = (self._alpha_i + 1) % len(ALPHAS)
@@ -316,7 +361,7 @@ class OverlayPanel(tk.Toplevel):
         self.lbl_hint.configure(text="透明度 %d%%" % round(v * 100))
 
     def close(self):
-        self.withdraw()
+        self.collapse()
 
     def refresh_session_label(self):
         """把当前会话名和会话列表灌进下拉菜单。"""
@@ -389,6 +434,9 @@ class OverlayPanel(tk.Toplevel):
     # ── 方向 ──
 
     def set_side(self, side):
+        if self.app.busy or self.app.recording_target is self:
+            self.flash("完成当前翻译或录音后再切换方向")
+            return
         self.side = side
         self.update_side_buttons()
         self.refresh_memory()
@@ -397,9 +445,12 @@ class OverlayPanel(tk.Toplevel):
         for btn, sd, col in ((self.btn_a, "toPeer", C_MINE),
                              (self.btn_b, "fromPeer", C_PEER)):
             on = (self.side == sd)
-            btn.configure(bg=col if on else "#e8ecf1",
-                          fg="white" if on else "#333333",
+            btn.configure(bg=col if on else ISLAND_FIELD,
+                          fg="white" if on else ISLAND_MUTED,
                           activebackground=col, activeforeground="white")
+        self.btn_go.configure(style="PeerGo.TButton" if self.side == "fromPeer" else "Go.TButton")
+        self.lbl_input.configure(text="对方的原文" if self.side == "fromPeer" else "你的原话")
+        self.lbl_output.configure(text="对方的意思" if self.side == "fromPeer" else "发给对方")
 
     def toggle_side(self):
         self.set_side("fromPeer" if self.side == "toPeer" else "toPeer")
@@ -422,25 +473,33 @@ class OverlayPanel(tk.Toplevel):
         return self.txt_out.get("1.0", "end").strip()
 
     def set_pair(self, text):
-        pass                                  # 悬浮窗位置紧，不显示语言对
+        self.lbl_hint.configure(text=(text + "；已自动复制") if text else "Ctrl+Enter 翻译")
+        if text:
+            self._update_pill("已复制")
 
     def set_busy(self, busy):
+        self._busy = busy
         self.btn_go.configure(state="disabled" if busy else "normal",
-                              bg="#a9bce8" if busy else C_MINE)
+                              text="翻译中…" if busy else "翻译")
+        if busy:
+            self.lbl_hint.configure(text="正在翻译…")
+        self._update_pill()
 
     def set_recording(self, on, elapsed=0.0):
+        self._recording = on
         if on:
             self.btn_mic.configure(text="■ 停止")
-            self.lvl.pack(side="left", padx=(0, 2), before=self.btn_copy)
+            self.lvl.pack(side="left", padx=(6, 0), after=self.btn_mic)
             self.lbl_hint.configure(text="0.0s   Esc 取消")
         else:
-            self.btn_mic.configure(text="🎤 说话")
+            self.btn_mic.configure(text="语音输入")
             draw_level(self.lvl, 0.0, self.accent())
             try:
                 self.lvl.pack_forget()
             except Exception:
                 pass
-            self.lbl_hint.configure(text="")
+            self.lbl_hint.configure(text="Ctrl+Enter 翻译")
+        self._update_pill()
 
     def set_level(self, v, elapsed=0.0, raw=None):
         draw_level(self.lvl, v, self.accent())
@@ -448,12 +507,11 @@ class OverlayPanel(tk.Toplevel):
         self.lbl_hint.configure(text="%.1fs%s" % (elapsed, tail))
 
     def refresh_memory(self):
-        """悬浮窗不摆记忆列表，只把条数写到标题上。"""
+        """会话菜单同步当前会话，输入提示同步方向和记忆数量。"""
+        self.lbl_title.configure(text="假装外国人")
         n = len(self.t.memory(self.side))
-        base = "假装外国人"
-        if n:
-            base += "  ·  %d 条" % n
-        self.lbl_title.configure(text=base)
+        self.lbl_input.configure(text="%s · 记忆 %d 条" % (
+            "对方的原文" if self.side == "fromPeer" else "你的原话", n))
         self.refresh_session_label()
 
     def accent(self):
@@ -477,24 +535,31 @@ class OverlayPanel(tk.Toplevel):
             return
         self.clipboard_clear()
         self.clipboard_append(txt)
-        self.lbl_hint.configure(text="已复制")
+        self.flash("已复制")
 
     def translate_clipboard(self):
+        self.expand(animate=False, focus=False)
         try:
             txt = self.clipboard_get()
         except Exception:
-            self.app.status("剪贴板是空的")
+            self.flash("剪贴板是空的")
             return
         txt = (txt or "").strip()
         if not txt:
-            self.app.status("剪贴板是空的")
+            self.flash("剪贴板是空的")
             return
         self.set_input(txt)
         self.do_translate()
 
     def flash(self, msg):
+        self._cancel("_flash_id")
         self.lbl_hint.configure(text=msg)
-        self.after(2500, lambda: self.lbl_hint.configure(text=""))
+        self._update_pill("失败" if "失败" in msg else "已复制" if "复制" in msg else "⇄")
+        def clear():
+            self._flash_id = None
+            self.lbl_hint.configure(text="Ctrl+Enter 翻译")
+            self._update_pill()
+        self._flash_id = self.after(4000, clear)
 
 
 # ───────────────────────── 接线 ─────────────────────────

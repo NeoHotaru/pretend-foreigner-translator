@@ -3,10 +3,12 @@
 
 #define AppName        "假装外国人翻译器"
 #define AppNameEn      "Pretend Foreigner Translator"
-#define AppVer         "1.0.5"
+#define AppVer         "1.1.0"
 #define AppPublisher   "NeoHotaru"
 #define AppURL         "https://github.com/NeoHotaru"
+#ifndef SrcDir
 #define SrcDir         "dist\pretend-foreigner"
+#endif
 
 [Setup]
 AppId={{8E1C2A54-3B7D-4F6E-9A11-7C5D2E4B9F30}
@@ -26,6 +28,7 @@ OutputBaseFilename=pretend-foreigner-setup-{#AppVer}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=assets\app-icon.ico
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayName={#AppName}
