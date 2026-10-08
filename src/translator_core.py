@@ -54,7 +54,7 @@ BUILTIN_BASE = "https://api.deepseek.com"
 BUILTIN_MODEL = "deepseek-chat"
 
 # 本程序版本。**改版本时这里和 installer.iss 的 AppVer 要一起改。**
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 REPO_SLUG = "NeoHotaru/pretend-foreigner-translator"
 
 
@@ -583,6 +583,8 @@ def call_google_free(text, target, use_proxy=False, timeout=25):
 # ───────────────────────── 会话 ─────────────────────────
 
 DEFAULT_CONFIG = {
+    "checkUpdates": True,
+    "autoDownloadUpdates": True,
     "providers": [],
     "activeBackend": "builtin",
     "myLang": "zh",

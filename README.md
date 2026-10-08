@@ -29,8 +29,8 @@
 
 | 包 | 大小 | 说明 |
 |---|---|---|
-| **安装包** `pretend-foreigner-setup-1.1.0.exe` | 约 202 MiB | 双击安装。向导里可以改安装目录（默认在当前用户的 `%LOCALAPPDATA%\Programs`，**那一页会显示各盘剩余空间**，C 盘紧就当场改）。带开始菜单、桌面快捷方式、卸载器。 |
-| **便携版** `pretend-foreigner-portable-1.1.0.zip` | 约 236 MiB | 解压到任意位置，双击里面的 `pretend-foreigner.exe`。不写注册表、不装服务。 |
+| **安装包** `pretend-foreigner-setup-1.1.1.exe` | 约 202 MiB | 双击安装。向导里可以改安装目录（默认在当前用户的 `%LOCALAPPDATA%\Programs`，**那一页会显示各盘剩余空间**，C 盘紧就当场改）。带开始菜单、桌面快捷方式、卸载器。 |
+| **便携版** `pretend-foreigner-portable-1.1.1.zip` | 约 236 MiB | 解压到任意位置，双击里面的 `pretend-foreigner.exe`。不写注册表、不装服务。 |
 
 两个包**都已经内含 228 MB 的语音识别模型**，装完就能用语音。
 （只有从源码运行才需要自己下模型，见下面的「依赖」。）
@@ -41,6 +41,18 @@
 
 **配置和会话不会写在程序目录里** —— 它们在 `%APPDATA%\pretend-foreigner\`。
 所以装到哪个盘、以后怎么更新，你的设置和会话都不会丢。
+
+### 安装版自动更新
+
+从 **v1.1.1** 起，安装版启动后检查 GitHub 最新正式版本，并在后台下载安装包。
+下载完成会显示「重启并更新」：点击后保存会话、退出旧程序、覆盖实际安装目录，并打开新版。
+安装标识与桌面快捷方式保持，配置和会话仍保存在用户数据目录。
+
+「设置 → 软件更新」可以分别关闭启动检查和自动下载；也可以在侧栏手动检查或取消下载。
+翻译或录音正在进行时不会开始安装。下载包会核对 GitHub 的 SHA-256 与文件大小，失败可重试。
+
+**v1.0.5 / v1.1.0 需要先手动安装一次 v1.1.1**，才具备自动下载与覆盖能力。
+便携版和源码通过「下载新版」打开下载页，不会自动覆盖机器上另一份安装版。
 
 ---
 
@@ -186,6 +198,8 @@ python selftest.py             # 全部回归，约 20 秒
 python selftest.py --offline   # 跳过联网/模型/界面，约 1 秒
 python artifacts/ui-refresh/check_interactions.py  # 沙箱界面交互，不发网络请求
 python artifacts/island-refresh/check_island.py    # 胶囊开合、拖动、焦点与后台翻译
+python tests/test_updates.py                      # 下载校验、缓存、取消与安装目录
+python tests/check_update_ui.py                    # 后台下载、重试、保存与重启交接
 ```
 
 改完代码先跑这个，它不依赖具体界面实现，能立刻分清是后端坏了还是前端坏了。

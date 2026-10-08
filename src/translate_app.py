@@ -13,6 +13,7 @@ translate_app.py  —  假装外国人翻译器 · tkinter 前端
 
 import ctypes
 import queue
+import webbrowser
 import threading
 import time
 import tkinter as tk
@@ -23,6 +24,7 @@ from translator_core import log
 
 from translator_core import (
     APP_NAME,
+    APP_VERSION,
     BUDGET_MAX,
     BUDGET_MIN,
     BUDGET_STEP,
@@ -555,6 +557,18 @@ class SettingsDialog(tk.Toplevel):
         ttk.Button(bb, text="保存并关闭", command=self.on_save, width=14).pack(side="left", padx=6)
         ttk.Button(bb, text="取消", command=self.destroy, width=10).pack(side="left")
 
+        updates = ttk.LabelFrame(right, text="软件更新", padding=10)
+        updates.pack(fill="x", pady=(18, 0))
+        self.v_update_check = tk.BooleanVar(value=app.t.config.get("checkUpdates", True))
+        self.v_update_download = tk.BooleanVar(value=app.t.config.get("autoDownloadUpdates", True))
+        ttk.Checkbutton(updates, text="启动时检查新版本", variable=self.v_update_check,
+                        command=self.save_update_preferences).pack(anchor="w")
+        ttk.Checkbutton(updates, text="安装版自动在后台下载更新", variable=self.v_update_download,
+                        command=self.save_update_preferences).pack(anchor="w", pady=(6, 0))
+        ttk.Label(updates, text="下载完成后点“重启并更新”，保留配置和会话。\n"
+                               "便携版和源码通过下载页升级。", style="Hint.TLabel",
+                  wraplength=360, justify="left").pack(anchor="w", pady=(8, 0))
+
         self.refresh_list()
 
     def toggle_show(self):
@@ -564,6 +578,13 @@ class SettingsDialog(tk.Toplevel):
     def set_check_updates(self, on):
         self.t.config["checkUpdates"] = bool(on)
         self.t.save_config()
+
+    def save_update_preferences(self):
+        self.app.t.config["checkUpdates"] = self.v_update_check.get()
+        self.app.t.config["autoDownloadUpdates"] = self.v_update_download.get()
+        self.app.t.save_config()
+        if not self.v_update_check.get() or not self.v_update_download.get():
+            self.app._update_cancel.set()
 
     def providers(self):
         return self.t.config.get("providers", [])
@@ -764,6 +785,13 @@ class App(tk.Tk):
         self.backend_keys = []
         self.busy = 0
         self._say_queue = queue.Queue()
+        self._update_queue = queue.Queue()
+        self._update_cancel = threading.Event()
+        self._update_info = None
+        self._update_package = None
+        self._update_checking = False
+        self._update_downloading = False
+        self._closing = False
 
         # 语音输入
         self.recorder = Recorder(device=self.t.config.get("asrDevice"))
@@ -804,6 +832,9 @@ class App(tk.Tk):
         #   于是所有已经配好引擎的机器（也就是全部老用户）永远走不到这一步，
         #   日志里从来没有 update 那一行。
         if self.t.config.get("checkUpdates", True):
+            self._update_checking = True
+            self.lbl_update.configure(text="正在检查更新…")
+            self.btn_update.configure(state="disabled")
             threading.Thread(target=self._check_updates, daemon=True).start()
 
     def _run_setup_if_needed(self):
@@ -835,18 +866,119 @@ class App(tk.Tk):
         self.load_session_into_ui()
 
     def _check_updates(self):
-        """只在新版真的存在时提示。线程里拿结果，回主线程改控件。"""
+        """后台检查，所有更新界面通过队列回主线程。"""
         try:
-            from translator_core import check_latest_release
-            newer, tag, url = check_latest_release()
-            # 无论成败都写一行 —— 否则"请求失败"和"没有新版"在日志里长得一样，
-            # 用户没法判断到底是哪种（我因此给过错误的排查指引）。
-            log("update check: newer=%s tag=%s url=%s" % (newer, tag, url))
-            if newer and tag:
-                self.after(0, lambda: self.status(
-                    "有新版本 %s —— %s" % (tag, url or "见项目主页的 Releases")))
+            from app_updates import fetch_update
+            info = fetch_update()
+            log("update check: version=%s latest=%s" % (APP_VERSION, info.version if info else "current"))
+            self._update_queue.put(("checked", info))
         except Exception as e:
             log("update check failed: %r" % e)
+            self._update_queue.put(("error", str(e)))
+
+    def on_update_action(self):
+        if self._update_downloading:
+            self._update_cancel.set()
+            self.btn_update.configure(text="正在取消…", state="disabled")
+            return
+        if self._update_package is not None:
+            self._apply_downloaded_update()
+        elif self._update_info is not None:
+            from app_updates import installed_directory
+            if installed_directory() is None:
+                webbrowser.open(self._update_info.release_url)
+            else:
+                self._download_app_update()
+        elif not self._update_checking:
+            self._update_checking = True
+            self.lbl_update.configure(text="正在检查更新…")
+            self.btn_update.configure(state="disabled")
+            threading.Thread(target=self._check_updates, daemon=True).start()
+
+    def _pump_updates(self):
+        while True:
+            try:
+                kind, value = self._update_queue.get_nowait()
+            except queue.Empty:
+                return
+            if kind == "checked":
+                self._update_checking = False
+                self._update_info = value
+                self.btn_update.configure(state="normal", text="检查更新")
+                if value is None:
+                    self.lbl_update.configure(text="v%s · 已是最新版本" % APP_VERSION)
+                    continue
+                from app_updates import installed_directory
+                self.lbl_update.configure(text="发现 v%s" % value.version)
+                self.status("有新版本 v%s" % value.version)
+                if installed_directory() is None:
+                    self.btn_update.configure(text="下载新版")
+                else:
+                    self.btn_update.configure(text="下载并更新")
+                    if self.t.config.get("checkUpdates", True) and self.t.config.get("autoDownloadUpdates", True):
+                        self._download_app_update()
+            elif kind == "progress":
+                done, total = value
+                self.lbl_update.configure(text="下载更新 %d%%\n%.0f / %.0f MiB" % (
+                    done * 100 / total, done / 1048576, total / 1048576))
+            elif kind == "ready":
+                self._update_downloading = False
+                self._update_package = value
+                self.lbl_update.configure(text="v%s 已准备好" % self._update_info.version)
+                self.btn_update.configure(text="重启并更新", state="normal")
+                self.status("新版已下载，点“重启并更新”即可升级")
+            elif kind == "cancelled":
+                self._update_downloading = False
+                self.lbl_update.configure(text="下载已取消")
+                self.btn_update.configure(text="下载并更新", state="normal")
+            elif kind == "error":
+                self._update_checking = self._update_downloading = False
+                self.lbl_update.configure(text=value)
+                self.btn_update.configure(text="重试下载" if self._update_info else "检查更新", state="normal")
+
+    def _download_app_update(self):
+        if self._update_downloading or self._update_info is None:
+            return
+        self._update_downloading = True
+        self._update_cancel = threading.Event()
+        self.btn_update.configure(text="取消下载", state="normal")
+        self.lbl_update.configure(text="正在下载 v%s…" % self._update_info.version)
+        info, cancel = self._update_info, self._update_cancel
+        def worker():
+            from app_updates import download_update, DownloadCancelled
+            last_progress = [0.0]
+            def progress(done, total):
+                now = time.monotonic()
+                if done == total or now - last_progress[0] > .2:
+                    last_progress[0] = now
+                    self._update_queue.put(("progress", (done, total)))
+            try:
+                path = download_update(info, progress=progress, cancel=cancel)
+                self._update_queue.put(("ready", path))
+            except DownloadCancelled:
+                self._update_queue.put(("cancelled", None))
+            except Exception as error:
+                log("update download failed: %r" % error)
+                self._update_queue.put(("error", str(error)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_downloaded_update(self):
+        if self.busy or self.recording_target is not None:
+            self.status("请先完成当前翻译或录音，再重启更新")
+            return
+        self.on_note_change()
+        if not self.t.save_all():
+            self.status("配置或会话保存失败，本次更新未启动", "bad")
+            return
+        try:
+            from app_updates import launch_installer
+            launch_installer(self._update_info, self._update_package)
+        except Exception as error:
+            self._update_package = None
+            self.lbl_update.configure(text=str(error))
+            self.btn_update.configure(text="重试下载")
+            return
+        self.on_close()
 
     def _install_hotkeys(self):
         try:
@@ -869,6 +1001,8 @@ class App(tk.Tk):
         self._say_queue.put((text, kind))
 
     def _pump(self):
+        if self._closing:
+            return
         try:
             while True:
                 text, kind = self._say_queue.get_nowait()
@@ -879,6 +1013,7 @@ class App(tk.Tk):
             pass
         except Exception:
             return                      # 窗口正在销毁，别再排下一次
+        self._pump_updates()
         self._pump_id = self.after(120, self._pump)
 
     # ── 界面 ──
@@ -933,6 +1068,15 @@ class App(tk.Tk):
                                     justify="left")
         self.lbl_engine.pack(anchor="w", pady=(0, 10))
         ttk.Button(bottom, text="引擎与应用设置", command=self.open_settings).pack(fill="x")
+
+        update_bar = ttk.Frame(sidebar, style="Side.TFrame")
+        update_bar.pack(side="bottom", fill="x", pady=(0, 16))
+        self.lbl_update = ttk.Label(update_bar, text="v%s" % APP_VERSION,
+                                    style="SideHint.TLabel", wraplength=190, justify="left")
+        self.lbl_update.pack(anchor="w", pady=(0, 7))
+        self.btn_update = ttk.Button(update_bar, text="检查更新", style="Side.TButton",
+                                     command=self.on_update_action)
+        self.btn_update.pack(fill="x")
 
         workspace = ttk.Frame(shell, padding=(24, 22, 24, 14))
         workspace.pack(side="left", fill="both", expand=True)
@@ -1445,6 +1589,8 @@ class App(tk.Tk):
         SettingsDialog(self)
 
     def on_close(self):
+        self._closing = True
+        self._update_cancel.set()
         # 关掉还没跑的定时器，否则销毁后回调触发会报 invalid command name
         for attr in ("_pump_id", "_hk_id", "_warm_id", "_rec_id"):
             try:

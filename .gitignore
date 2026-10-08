@@ -40,3 +40,4 @@ artifacts/**/build-result.txt
 artifacts/**/selftest-result.txt
 artifacts/**/*.png
 artifacts/release-*/
+artifacts/update-refresh/
