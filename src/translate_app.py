@@ -12,12 +12,14 @@ translate_app.py  —  假装外国人翻译器 · tkinter 前端
 """
 
 import ctypes
+import copy
 import queue
 import webbrowser
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
+from modern_dialogs import ask_text
 
 from voice_input import AsrClient, Recorder, list_input_devices, default_input_device
 from translator_core import log
@@ -48,11 +50,12 @@ DEFAULT_GEOMETRY = "1240x860"
 # 颜色统一从 ui_kit 取，别各定义一份（改主题只改一个地方）
 from ui_kit import (C_BAD, C_BG, C_LINE, C_MINE, C_MUTED,  # noqa: E402
                     C_OK, C_OUT_BG, C_PEER, C_TEXT, C_SURFACE, C_SIDEBAR,
-                    FONT_UI, FONT_SMALL, FONT_HEAD, FONT_TEXT, FONT_TITLE,
-                    text_surface, readonly_text, apply_app_icon)
+                    FONT_UI, FONT_SMALL, FONT_HEAD, FONT_TEXT, FONT_TITLE, FONT_READING,
+                    text_surface, readonly_text, apply_app_icon, auto_scrollbar, configure_fonts)
 
 
 def setup_style(root):
+    configure_fonts(root)
     st = ttk.Style(root)
     try:
         st.theme_use("clam")
@@ -101,7 +104,8 @@ def setup_style(root):
                  rowheight=30, font=FONT_SMALL, borderwidth=0)
     st.configure("Treeview.Heading", font=FONT_SMALL, padding=(8, 6), background=C_BG)
     st.configure("Status.TLabel", background=C_BG, foreground="#4b5563", font=FONT_SMALL)
-    return st
+    from modern_theme import install
+    return install(root)
 
 
 # 喇叭绘制挪到 ui_kit.py（悬浮窗也要用，避免循环导入）
@@ -184,7 +188,7 @@ class Lane(ttk.Frame):
     """一栏：输入 -> 翻译 -> 译文，外加本栏自己的记忆。"""
 
     def __init__(self, master, side, accent, on_translate, on_copy, on_voice, app):
-        super().__init__(master, style="Card.TFrame", padding=20)
+        super().__init__(master, style="Lane.TFrame", padding=22)
         self.app = app
         self.side = side                      # "toPeer" / "fromPeer"
         self.accent = accent
@@ -228,7 +232,7 @@ class Lane(ttk.Frame):
                              highlightthickness=0, bd=0, bg=C_SURFACE)
         self._draw_level(0.0)
         self.btn_clear = ttk.Button(bar, text="清空", command=self.clear_all,
-                                    style="Quiet.TButton", width=5)
+                                    style="CardQuiet.TButton", width=5)
         self.btn_clear.pack(side="right")
         self.lbl_hint = ttk.Label(pad, text="Ctrl+Enter 翻译", style="CardHint.TLabel")
         self.lbl_hint.grid(row=3, column=0, sticky="w", pady=(6, 14))
@@ -238,18 +242,20 @@ class Lane(ttk.Frame):
         ttk.Label(out_head, text="发给对方" if side == "toPeer" else "对方的意思",
                   style="CardHint.TLabel").pack(side="left")
         self.btn_copy = ttk.Button(out_head, text="复制译文", command=on_copy,
-                                   style="Quiet.TButton", width=9)
+                                   style="CardQuiet.TButton", width=9)
         self.btn_copy.pack(side="right")
-        surface, self.txt_out = text_surface(pad, height=6, bg=C_OUT_BG)
+        surface, self.txt_out = text_surface(pad, height=5, bg=C_OUT_BG, font=FONT_READING)
         surface.grid(row=5, column=0, sticky="nsew")
         readonly_text(self.txt_out)
 
         memory_head = ttk.Frame(pad, style="Card.TFrame")
         memory_head.grid(row=6, column=0, sticky="ew", pady=(14, 0))
         self.btn_memory = ttk.Button(memory_head, text="查看记忆  ▾",
-                                      style="Quiet.TButton", command=self.toggle_memory)
+                                      style="CardQuiet.TButton", command=self.toggle_memory)
         self.btn_memory.pack(side="left")
         ttk.Label(memory_head, text="翻译完成后自动复制", style="CardHint.TLabel").pack(side="right")
+        self.btn_context=ttk.Button(pad,style='Context.TButton',
+                                   command=lambda:app.open_translation_context(side))
         self.memory_open = False
         # 独立、非模态的历史窗口，查看记忆时仍能阅读和编辑译文。
         self.memory_window = tk.Toplevel(self)
@@ -281,7 +287,7 @@ class Lane(ttk.Frame):
         self.tree.column("out", width=190, stretch=True, anchor="w")
         self.tree.column("on", width=44, stretch=False, anchor="center")
         self.tree.grid(row=1, column=0, sticky="nsew")
-        sb = ttk.Scrollbar(mem, orient="vertical", command=self.tree.yview)
+        sb = auto_scrollbar(mem, self.tree.yview)
         sb.grid(row=1, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.bind("<Double-1>", self._recall)
@@ -335,6 +341,14 @@ class Lane(ttk.Frame):
     def clear_all(self):
         self.txt_in.clear_value()
         self.txt_out.delete("1.0", "end")
+        self.app.clear_translation_context(self.side)
+
+    def set_context_record(self, record):
+        if record is None:self.btn_context.grid_remove()
+        else:
+            from context_view import usage_summary
+            self.btn_context.configure(text=usage_summary(record))
+            self.btn_context.grid(row=7,column=0,sticky='w',pady=(8,0))
 
     def set_busy(self, busy):
         self.btn_go.configure(state="disabled" if busy else "normal",
@@ -429,147 +443,144 @@ class Lane(ttk.Frame):
 class SettingsDialog(tk.Toplevel):
     def __init__(self, app):
         super().__init__(app)
-        self.app = app
-        self.t = app.t
-        self.title("设置 · 自定义服务")
+        self.app, self.t = app, app.t
+        self.idx = -1
+        from provider_probe import ProviderProbe
+        self._probe = ProviderProbe()
+        self._probe_kind = None
+        self._probe_id = None
+        self._probe_closed = False
+        self.title("设置 · 假装外国人")
+        self.configure(bg=C_BG)
         self.transient(app)
         self.resizable(False, False)
         self.grab_set()
-        self.idx = -1
-
-        wrap = ttk.Frame(self, padding=12)
-        wrap.pack(fill="both", expand=True)
-
-        left = ttk.Frame(wrap)
-        left.grid(row=0, column=0, sticky="ns")
-        right = ttk.Frame(wrap)
-        right.grid(row=0, column=1, sticky="nsew", padx=(14, 0))
-
-        ttk.Label(left, text="已保存的服务", style="Hint.TLabel").pack(anchor="w")
-        self.lst = tk.Listbox(left, height=16, width=22, exportselection=False,
-                              font=FONT_SMALL, relief="solid", borderwidth=1,
-                              highlightthickness=1, highlightbackground=C_LINE,
-                              activestyle="none")
-        self.lst.pack(fill="both", expand=True, pady=(4, 6))
-        self.lst.bind("<<ListboxSelect>>", self.on_pick)
-        b = ttk.Frame(left)
-        b.pack(fill="x")
-        ttk.Button(b, text="新建", command=self.on_new, width=8).pack(side="left")
-        ttk.Button(b, text="删除", command=self.on_del, width=8).pack(side="left", padx=4)
-
-        # —— 语音输入 ——
-        voice = ttk.LabelFrame(left, text="语音输入", padding=6)
-        voice.pack(fill="x", pady=(12, 0))
-
-        ttk.Label(voice, text="识别后端", style="Hint.TLabel").pack(anchor="w")
-        self.v_asr = tk.StringVar(
-            value={"sensevoice": "SenseVoice（中文准）",
-                   "whisper": "Whisper（多语言稳）"}.get(
-                       app.t.config.get("asrBackend", "sensevoice"),
-                       "SenseVoice（中文准）"))
-        ttk.Combobox(voice, textvariable=self.v_asr, state="readonly", width=20,
-                     values=["SenseVoice（中文准）", "Whisper（多语言稳）"]).pack(fill="x")
-
-        ttk.Label(voice, text="麦克风", style="Hint.TLabel").pack(anchor="w", pady=(6, 0))
-        devs = list_input_devices()
-        self._dev_ids = [None] + [d[0] for d in devs]
-        self._dev_labels = ["（系统默认）"] + ["%s" % d[1][:22] for d in devs]
-        cur = app.t.config.get("asrDevice")
-        self.v_dev = tk.StringVar(
-            value=self._dev_labels[self._dev_ids.index(cur)]
-            if cur in self._dev_ids else self._dev_labels[0])
-        ttk.Combobox(voice, textvariable=self.v_dev, state="readonly", width=20,
-                     values=self._dev_labels).pack(fill="x")
-
-        ttk.Label(voice, text="首次说话要先加载模型（约 3 秒）\n"
-                              "换个后端要关掉程序重开",
-                  style="Hint.TLabel", wraplength=200,
-                  justify="left").pack(anchor="w", pady=(6, 0))
-
-        # —— 快捷键（可改）——
-        hkf = ttk.LabelFrame(left, text="全局快捷键", padding=6)
-        hkf.pack(fill="x", pady=(10, 0))
-        try:
-            from overlay import hotkey_pair, key_name
-            (t_mods, t_vk), (c_mods, c_vk) = hotkey_pair(app)
-            self._hk = {"toggle": [t_mods, t_vk], "clip": [c_mods, c_vk]}
-        except Exception as e:
-            self._hk = {"toggle": list((0, 0x4F)), "clip": list((0, 0x56))}
-            ttk.Label(hkf, text="取不到当前键位（%s）" % e,
-                      style="Hint.TLabel").pack(anchor="w")
-        self._hk_lbl = {}
-        for _k, _label in (("toggle", "显示/隐藏悬浮窗"), ("clip", "翻译剪贴板")):
-            _row = ttk.Frame(hkf)
-            _row.pack(fill="x", pady=(2, 0))
-            ttk.Label(_row, text=_label, width=14,
-                      style="Hint.TLabel").pack(side="left")
-            ttk.Button(_row, text="改", width=4,
-                       command=lambda k=_k: self.on_rebind(k)).pack(side="left")
-            _lb = ttk.Label(_row, text=key_name(*self._hk[_k]), style="Hint.TLabel")
-            _lb.pack(side="left", padx=6)
-            self._hk_lbl[_k] = _lb
-        ttk.Button(hkf, text="恢复默认",
-                   command=self.on_hotkey_default).pack(anchor="w", pady=(6, 0))
-        self.lbl_hk = ttk.Label(
-            hkf, text="全局生效，其它程序里也能按。\n改完点「保存并关闭」立刻生效，不用重启。",
-            style="Hint.TLabel", wraplength=210, justify="left")
-        self.lbl_hk.pack(anchor="w", pady=(4, 0))
-
-        def field(label, widget):
-            ttk.Label(right, text=label, style="Hint.TLabel").pack(anchor="w", pady=(8, 2))
-            widget.pack(fill="x")
-
+        self.bind('<Escape>', lambda e: self.destroy())
+        wrap = ttk.Frame(self, padding=24)
+        wrap.pack(fill='both', expand=True)
+        ttk.Label(wrap, text='把它调成你的习惯', style='Head.TLabel').pack(anchor='w')
+        ttk.Label(wrap, text='服务、输入和语音，都在这里。', style='Hint.TLabel').pack(anchor='w', pady=(6,20))
+        self.notebook = ttk.Notebook(wrap, width=760, height=440)
+        self.notebook.pack(fill='both', expand=True)
+        pages = []
+        for title in ('翻译服务', '输入与悬浮', '语音输入', '软件更新'):
+            page = ttk.Frame(self.notebook, padding=(0,12))
+            self.notebook.add(page, text=title)
+            pages.append(page)
+        provider, inputs, voice, updates = pages
+        left = ttk.Frame(provider, width=190)
+        left.pack(side='left', fill='y', padx=(0,24))
+        right = ttk.Frame(provider)
+        right.pack(side='left', fill='both', expand=True)
+        ttk.Label(left, text='已保存的服务', style='Hint.TLabel').pack(anchor='w', pady=(0,8))
+        self.lst = tk.Listbox(left, height=10, width=21, exportselection=False,
+            font=FONT_UI, relief='flat', borderwidth=0, bg=C_SURFACE, fg=C_TEXT,
+            selectbackground='#E6EEFC', selectforeground=C_MINE,
+            highlightthickness=0, activestyle='none')
+        self.lst.pack(fill='both', expand=True, pady=(0,12))
+        self.lst.bind('<<ListboxSelect>>', self.on_pick)
+        b = ttk.Frame(left); b.pack(fill='x')
+        ttk.Button(b, text='新建', command=self.on_new).pack(side='left')
+        ttk.Button(b, text='删除', command=self.on_del, style='Quiet.TButton').pack(side='right')
         self.v_name = tk.StringVar()
-        self.v_base = tk.StringVar(value="https://api.deepseek.com")
+        self.v_base = tk.StringVar(value='https://api.deepseek.com')
         self.v_key = tk.StringVar()
         self.v_model = tk.StringVar()
         self.v_proxy = tk.BooleanVar(value=False)
-
-        field("名称", ttk.Entry(right, textvariable=self.v_name, width=48))
-        field("Base URL（OpenAI 兼容）", ttk.Entry(right, textvariable=self.v_base, width=48))
-
-        ttk.Label(right, text="API Key", style="Hint.TLabel").pack(anchor="w", pady=(8, 2))
-        kf = ttk.Frame(right)
-        kf.pack(fill="x")
-        self.e_key = ttk.Entry(kf, textvariable=self.v_key, width=40, show="*")
-        self.e_key.pack(side="left", fill="x", expand=True)
         self.v_show = tk.BooleanVar(value=False)
-        ttk.Checkbutton(kf, text="显示", variable=self.v_show,
-                        command=self.toggle_show).pack(side="left", padx=6)
+        def field(label, widget):
+            ttk.Label(right,text=label,style='Hint.TLabel').pack(anchor='w',pady=(0,5))
+            widget.pack(fill='x',pady=(0,12))
+        field('服务名称',ttk.Entry(right,textvariable=self.v_name))
+        field('Base URL · OpenAI 兼容',ttk.Entry(right,textvariable=self.v_base))
+        ttk.Label(right,text='API Key',style='Hint.TLabel').pack(anchor='w',pady=(0,5))
+        kf=ttk.Frame(right);kf.pack(fill='x',pady=(0,12))
+        self.e_key=ttk.Entry(kf,textvariable=self.v_key,show='*')
+        self.e_key.pack(side='left',fill='x',expand=True)
+        ttk.Checkbutton(kf,text='显示',variable=self.v_show,command=self.toggle_show).pack(side='left',padx=(12,0))
+        ttk.Label(right,text='模型',style='Hint.TLabel').pack(anchor='w',pady=(0,5))
+        mf=ttk.Frame(right);mf.pack(fill='x')
+        self.cb_model=ttk.Combobox(mf,textvariable=self.v_model)
+        self.cb_model.pack(side='left',fill='x',expand=True)
+        self.btn_models=ttk.Button(mf,text='读取模型',command=self.on_models)
+        self.btn_models.pack(side='left',padx=(8,0))
+        ttk.Checkbutton(right,text='使用本地代理 · 127.0.0.1:7890',variable=self.v_proxy).pack(anchor='w',pady=(10,0))
+        self.lbl_tip=ttk.Label(right,text='填好地址和 Key，读取模型后保存服务。',style='Hint.TLabel',wraplength=490,justify='left')
+        self.lbl_tip.pack(anchor='w',pady=(8,0))
+        bb=ttk.Frame(right);bb.pack(fill='x',pady=(12,0))
+        ttk.Button(bb,text='保存服务',style='Soft.TButton',command=self.on_save).pack(side='left')
+        self.btn_test=ttk.Button(bb,text='测试连接',command=self.on_test)
+        self.btn_test.pack(side='left',padx=8)
+        self.btn_cancel_probe=ttk.Button(bb,text='取消检测',command=self.cancel_probe,style='Quiet.TButton')
 
-        ttk.Label(right, text="模型", style="Hint.TLabel").pack(anchor="w", pady=(8, 2))
-        mf = ttk.Frame(right)
-        mf.pack(fill="x")
-        self.cb_model = ttk.Combobox(mf, textvariable=self.v_model, width=32)
-        self.cb_model.pack(side="left", fill="x", expand=True)
-        ttk.Button(mf, text="读取模型", command=self.on_models, width=10).pack(side="left", padx=6)
+        self.v_selection=tk.BooleanVar(value=self.t.config.get('selectionButton',True))
+        ttk.Label(inputs,text='选中一句，直接翻译',style='Head.TLabel').pack(anchor='w')
+        ttk.Label(inputs,text='输入框里的中文原位替换；对方的消息加入参考，并显示中文译文。',style='Hint.TLabel').pack(anchor='w',pady=(6,14))
+        ttk.Checkbutton(inputs,text='选中文字时显示翻译 / 参考按钮',variable=self.v_selection,command=self.on_selection_toggle).pack(anchor='w')
+        ttk.Separator(inputs).pack(fill='x',pady=20)
+        ttk.Label(inputs,text='全局快捷键',style='Head.TLabel').pack(anchor='w',pady=(0,12))
+        from overlay import hotkey_pair, input_key_pair, key_name
+        (tm,tv),(cm,cv)=hotkey_pair(app)
+        self._hk={'toggle':[tm,tv],'clip':[cm,cv],'input':list(input_key_pair(app))}
+        self._hk_lbl={}
+        for k,label in (('toggle','显示 / 隐藏悬浮岛'),('clip','翻译剪贴板'),('input','原输入框翻译')):
+            row=ttk.Frame(inputs);row.pack(fill='x',pady=4)
+            ttk.Label(row,text=label,width=24).pack(side='left')
+            lb=ttk.Label(row,text=key_name(*self._hk[k]),foreground=C_MINE)
+            lb.pack(side='left',fill='x',expand=True);self._hk_lbl[k]=lb
+            ttk.Button(row,text='更改',command=lambda k=k:self.on_rebind(k),style='Quiet.TButton').pack(side='right')
+        ttk.Button(inputs,text='恢复默认快捷键',command=self.on_hotkey_default,style='Quiet.TButton').pack(anchor='w',pady=(12,0))
+        self.lbl_hk=ttk.Label(inputs,text='快捷键修改将在保存后生效；选区按钮开关立即生效。',style='Hint.TLabel',wraplength=740,justify='left')
+        self.lbl_hk.pack(anchor='w',pady=(8,0))
 
-        ttk.Checkbutton(right, text="走本地代理 127.0.0.1:7890（OpenAI 等需要时勾上）",
-                        variable=self.v_proxy).pack(anchor="w", pady=(10, 0))
+        ttk.Label(voice,text='用说话的方式输入',style='Head.TLabel').pack(anchor='w')
+        ttk.Label(voice,text='识别后填入原文，再按你选择的语气翻译。',style='Hint.TLabel').pack(anchor='w',pady=(6,24))
+        self.v_asr=tk.StringVar(value={'sensevoice':'SenseVoice（中文准）','whisper':'Whisper（多语言稳）'}.get(self.t.config.get('asrBackend'),'SenseVoice（中文准）'))
+        ttk.Label(voice,text='识别后端',style='Hint.TLabel').pack(anchor='w',pady=(0,6))
+        ttk.Combobox(voice,textvariable=self.v_asr,state='readonly',values=['SenseVoice（中文准）','Whisper（多语言稳）']).pack(fill='x')
+        devs=list_input_devices()
+        self._dev_ids=[None]+[d[0] for d in devs]
+        self._dev_labels=['（系统默认）']+[str(d[1]) for d in devs]
+        cur=self.t.config.get('asrDevice')
+        self.v_dev=tk.StringVar(value=self._dev_labels[self._dev_ids.index(cur)] if cur in self._dev_ids else self._dev_labels[0])
+        ttk.Label(voice,text='麦克风',style='Hint.TLabel').pack(anchor='w',pady=(22,6))
+        ttk.Combobox(voice,textvariable=self.v_dev,state='readonly',values=self._dev_labels).pack(fill='x')
+        ttk.Label(voice,text='首次识别会加载模型。切换识别后端后，重启软件生效。',style='Hint.TLabel').pack(anchor='w',pady=(16,0))
 
-        self.lbl_tip = ttk.Label(right, text="填好 Base URL 和 Key，点「读取模型」，选一个。",
-                                 style="Hint.TLabel", wraplength=380, justify="left")
-        self.lbl_tip.pack(anchor="w", pady=(10, 0))
-
-        bb = ttk.Frame(right)
-        bb.pack(fill="x", pady=(12, 0))
-        ttk.Button(bb, text="测试", command=self.on_test, width=10).pack(side="left")
-        ttk.Button(bb, text="保存并关闭", command=self.on_save, width=14).pack(side="left", padx=6)
-        ttk.Button(bb, text="取消", command=self.destroy, width=10).pack(side="left")
-
-        updates = ttk.LabelFrame(right, text="软件更新", padding=10)
-        updates.pack(fill="x", pady=(18, 0))
-        self.v_update_check = tk.BooleanVar(value=app.t.config.get("checkUpdates", True))
-        self.v_update_download = tk.BooleanVar(value=app.t.config.get("autoDownloadUpdates", True))
-        ttk.Checkbutton(updates, text="启动时检查新版本", variable=self.v_update_check,
-                        command=self.save_update_preferences).pack(anchor="w")
-        ttk.Checkbutton(updates, text="安装版自动在后台下载更新", variable=self.v_update_download,
-                        command=self.save_update_preferences).pack(anchor="w", pady=(6, 0))
-        ttk.Label(updates, text="下载完成后点“重启并更新”，保留配置和会话。\n"
-                               "便携版和源码通过下载页升级。", style="Hint.TLabel",
-                  wraplength=360, justify="left").pack(anchor="w", pady=(8, 0))
-
+        ttk.Label(updates,text='保持最新',style='Head.TLabel').pack(anchor='w')
+        ttk.Label(updates,text='当前版本 v'+APP_VERSION,style='Hint.TLabel').pack(anchor='w',pady=(6,24))
+        self.v_update_check=tk.BooleanVar(value=self.t.config.get('checkUpdates',True))
+        self.v_update_download=tk.BooleanVar(value=self.t.config.get('autoDownloadUpdates',True))
+        ttk.Checkbutton(updates,text='启动时检查新版本',variable=self.v_update_check,command=self.save_update_preferences).pack(anchor='w')
+        ttk.Checkbutton(updates,text='安装版在后台下载更新',variable=self.v_update_download,command=self.save_update_preferences).pack(anchor='w',pady=(12,0))
+        ttk.Label(updates,text='下载完成后，点击主界面的「重启并更新」。配置和会话会保留。\n便携版和源码版通过下载页升级；这些开关立即生效。',style='Hint.TLabel',justify='left').pack(anchor='w',pady=(16,0))
+        footer=ttk.Frame(wrap);footer.pack(fill='x',pady=(20,0))
+        ttk.Button(footer,text='保存并关闭',style='Go.TButton',command=self.save_and_close).pack(side='right')
+        ttk.Button(footer,text='关闭',command=self.destroy,style='Quiet.TButton').pack(side='right',padx=(0,10))
         self.refresh_list()
+        if self.providers():
+            self.lst.selection_set(0)
+            self.on_pick()
+        self._provider_snapshot=self._provider_values()
+        self._probe_traces=[(v,v.trace_add('write',self._probe_settings_changed))
+                            for v in (self.v_name,self.v_base,self.v_key,self.v_model,self.v_proxy)]
+        self.update_idletasks()
+        x=app.winfo_rootx()+max(0,(app.winfo_width()-self.winfo_reqwidth())//2)
+        y=app.winfo_rooty()+max(0,(app.winfo_height()-self.winfo_reqheight())//2)
+        self.geometry('+%d+%d'%(x,y))
+
+    def _provider_values(self):
+        return (self.v_name.get(),self.v_base.get(),self.v_key.get(),self.v_model.get(),self.v_proxy.get())
+
+    def save_and_close(self):
+        if self._provider_values()!=self._provider_snapshot and not self.on_save():
+            self.notebook.select(0)
+            return
+        self.save_voice()
+        if not self.save_hotkeys():
+            self.notebook.select(1)
+            return
+        self.destroy()
 
     def toggle_show(self):
         self.e_key.configure(show="" if self.v_show.get() else "*")
@@ -606,6 +617,7 @@ class SettingsDialog(tk.Toplevel):
         self.v_model.set(p.get("model", ""))
         self.v_proxy.set(bool(p.get("useProxy", False)))
         self.cb_model["values"] = [p.get("model", "")] if p.get("model") else []
+        self._provider_snapshot = self._provider_values()
 
     def on_new(self):
         self.idx = -1
@@ -617,6 +629,7 @@ class SettingsDialog(tk.Toplevel):
         self.v_proxy.set(False)
         self.cb_model["values"] = []
         self.lbl_tip.configure(text="新建：填 Base URL 和 Key，点「读取模型」，选一个。")
+        self._provider_snapshot = self._provider_values()
 
     def on_del(self):
         sel = self.lst.curselection()
@@ -630,26 +643,76 @@ class SettingsDialog(tk.Toplevel):
         self.app.refresh_backends()
 
     def on_models(self):
-        self.lbl_tip.configure(text="读取中…")
-        self.update_idletasks()
-        try:
-            ids = self.t.probe_models(self.v_base.get(), self.v_key.get(), self.v_proxy.get())
-            self.cb_model["values"] = ids
-            if ids:
-                self.v_model.set(ids[0])
-            self.lbl_tip.configure(text="读到 %d 个：%s" % (len(ids), ", ".join(ids[:6])))
-        except Exception as e:
-            self.lbl_tip.configure(text="读取失败：%s" % e)
+        self._start_probe('models')
 
     def on_test(self):
-        self.lbl_tip.configure(text="测试中…")
-        self.update_idletasks()
-        try:
-            r = self.t.probe_chat(self.v_base.get(), self.v_key.get(),
-                                  self.v_model.get(), self.v_proxy.get())
-            self.lbl_tip.configure(text="测试通过：" + r["text"][:120])
-        except Exception as e:
-            self.lbl_tip.configure(text="测试失败：%s" % e)
+        self._start_probe('chat')
+
+    def _probe_settings_changed(self, *_args):
+        if self._probe_kind:
+            self.cancel_probe('服务设置已变化，已取消旧检测。')
+        elif not self._probe_closed:
+            self.lbl_tip.configure(text='服务设置已变化，可重新测试连接。',foreground=C_MUTED)
+
+    def _probe_buttons(self, busy):
+        self.btn_models.configure(state='disabled' if busy else 'normal',text='读取中…' if busy and self._probe_kind=='models' else '读取模型')
+        self.btn_test.configure(state='disabled' if busy else 'normal',text='检测中…' if busy and self._probe_kind=='chat' else '测试连接')
+        if busy:self.btn_cancel_probe.pack(side='left',padx=(0,8))
+        else:self.btn_cancel_probe.pack_forget()
+
+    def _start_probe(self, kind):
+        if self._probe_kind:return
+        values=dict(base=self.v_base.get().strip(),key=self.v_key.get().strip(),
+                    model=self.v_model.get().strip(),proxy=self.v_proxy.get())
+        if not values['base'] or not values['key'] or (kind=='chat' and not values['model']):
+            self.lbl_tip.configure(text='请填写服务地址和 API Key。' if kind=='models' else '请填写服务地址、API Key 和模型。',foreground=C_BAD)
+            return
+        try:self._probe.start(kind,values)
+        except Exception as error:
+            self.lbl_tip.configure(text='未能开始检测：'+str(error),foreground=C_BAD)
+            return
+        self._probe_kind=kind
+        self._probe_snapshot=self._provider_values()
+        self._probe_buttons(True)
+        self.lbl_tip.configure(text='正在读取模型，可以继续查看其他设置。' if kind=='models' else '正在测试连接，可以继续查看其他设置。',foreground=C_MUTED)
+        self._probe_id=self.after(60,self._poll_probe)
+
+    def _poll_probe(self):
+        self._probe_id=None
+        if self._probe_closed or not self._probe_kind:return
+        result=self._probe.poll()
+        if result is None:
+            self._probe_id=self.after(60,self._poll_probe)
+            return
+        kind,self._probe_kind=self._probe_kind,None
+        self._probe_buttons(False)
+        if self._provider_values()!=self._probe_snapshot:return
+        if not result['ok']:
+            self.lbl_tip.configure(text=('读取失败：' if kind=='models' else '连接失败：')+result['error'],foreground=C_BAD)
+        elif kind=='models':
+            ids=result['value'];self.cb_model['values']=ids
+            if ids and self.v_model.get() not in ids:self.v_model.set(ids[0])
+            self.lbl_tip.configure(text='读到 %d 个模型，请选择后保存服务。'%len(ids),foreground=C_OK)
+        else:
+            self.lbl_tip.configure(text='连接成功：'+result['value']['text'][:100],foreground=C_OK)
+
+    def cancel_probe(self, message='已取消检测。'):
+        self._probe.cancel()
+        if self._probe_id is not None:
+            self.after_cancel(self._probe_id);self._probe_id=None
+        self._probe_kind=None
+        self._probe_buttons(False)
+        self.lbl_tip.configure(text=message,foreground=C_MUTED)
+
+    def destroy(self):
+        if hasattr(self,'_probe'):
+            self._probe_closed=True
+            self._probe.cancel()
+            if self._probe_id is not None:
+                self.after_cancel(self._probe_id);self._probe_id=None
+            for variable,trace in getattr(self,'_probe_traces',[]):
+                variable.trace_remove('write',trace)
+        super().destroy()
 
     # ── 快捷键编辑 ──
 
@@ -659,6 +722,7 @@ class SettingsDialog(tk.Toplevel):
                              MOD_SHIFT, MOD_WIN, HOTKEY_KEYS)
         dlg = tk.Toplevel(self)
         dlg.title("改快捷键")
+        dlg.configure(bg=C_BG)
         dlg.transient(self)
         dlg.resizable(False, False)
 
@@ -714,10 +778,11 @@ class SettingsDialog(tk.Toplevel):
         dlg.grab_set()
 
     def on_hotkey_default(self):
-        from overlay import DEFAULT_TOGGLE, DEFAULT_CLIP, key_name
+        from overlay import DEFAULT_TOGGLE, DEFAULT_CLIP, DEFAULT_INPUT, key_name
         self._hk["toggle"] = list(DEFAULT_TOGGLE)
         self._hk["clip"] = list(DEFAULT_CLIP)
-        for k in ("toggle", "clip"):
+        self._hk["input"] = list(DEFAULT_INPUT)
+        for k in ("toggle", "clip", "input"):
             self._hk_lbl[k].configure(text=key_name(*self._hk[k]))
         self.lbl_hk.configure(text="已恢复默认 —— 点「保存并关闭」生效。")
 
@@ -726,10 +791,17 @@ class SettingsDialog(tk.Toplevel):
         from overlay import apply_hotkeys
         self.t.config["hotkeyToggle"] = list(self._hk["toggle"])
         self.t.config["hotkeyClipboard"] = list(self._hk["clip"])
+        self.t.config["hotkeyInput"] = list(self._hk["input"])
         self.t.save_config()
         good, info = apply_hotkeys(self.app)
         self.lbl_hk.configure(text=("快捷键已生效：%s" % info) if good
                               else ("装不上：%s" % info))
+        return good
+
+    def on_selection_toggle(self):
+        self.t.config['selectionButton'] = bool(self.v_selection.get())
+        self.t.save_config()
+        self.app.apply_selection_button()
 
     def save_voice(self):
         self.t.config["asrBackend"] = ("sensevoice"
@@ -745,12 +817,10 @@ class SettingsDialog(tk.Toplevel):
         self.app.recorder.device = dev
 
     def on_save(self):
-        self.save_voice()
-        self.save_hotkeys()
         name = self.v_name.get().strip()
         if not name:
-            self.lbl_tip.configure(text="名称不能空。")
-            return
+            self.lbl_tip.configure(text="请为服务填写一个名称。")
+            return False
         self.t.upsert_provider({
             "name": name,
             "baseUrl": self.v_base.get().strip(),
@@ -760,7 +830,9 @@ class SettingsDialog(tk.Toplevel):
         })
         self.app.refresh_backends()
         self.refresh_list()
-        self.lbl_tip.configure(text="已保存。")
+        self.lbl_tip.configure(text="服务已保存。")
+        self._provider_snapshot = self._provider_values()
+        return True
 
 
 # ───────────────────────── 主窗口 ─────────────────────────
@@ -785,6 +857,9 @@ class App(tk.Tk):
         self.backend_keys = []
         self.busy = 0
         self._say_queue = queue.Queue()
+        self._translation_events = queue.Queue()
+        self._context_records = {}
+        self.context_view = None
         self._update_queue = queue.Queue()
         self._update_cancel = threading.Event()
         self._update_info = None
@@ -792,6 +867,11 @@ class App(tk.Tk):
         self._update_checking = False
         self._update_downloading = False
         self._closing = False
+        self.input_composer = None
+        self.inline_input = None
+        self.peer_reference = None
+        self.selection_button = None
+        self._selection_id = self.after(650, self.apply_selection_button)
 
         # 语音输入
         self.recorder = Recorder(device=self.t.config.get("asrDevice"))
@@ -1014,6 +1094,15 @@ class App(tk.Tk):
         except Exception:
             return                      # 窗口正在销毁，别再排下一次
         self._pump_updates()
+        self._pump_translations()
+        if self.input_composer is not None:
+            self.input_composer.pump()
+        if self.inline_input is not None:
+            self.inline_input.pump()
+        if self.peer_reference is not None:
+            self.peer_reference.pump()
+        if self.selection_button is not None:
+            self.selection_button.pump()
         self._pump_id = self.after(120, self._pump)
 
     # ── 界面 ──
@@ -1029,7 +1118,7 @@ class App(tk.Tk):
         brand.pack(fill="x")
         tk.Label(brand, image=self._app_icon_images[0], bg=C_SIDEBAR).pack(side="left", padx=(0, 8))
         ttk.Label(brand, text="假装外国人", style="Side.TLabel",
-                  font=("Microsoft YaHei UI", 17, "bold")).pack(side="left")
+                  font=FONT_HEAD).pack(side="left")
         ttk.Label(sidebar, text="把话说成你的样子", style="SideHint.TLabel").pack(
             anchor="w", pady=(6, 30))
 
@@ -1040,8 +1129,8 @@ class App(tk.Tk):
         ttk.Button(sidebar, text="新建会话", command=self.on_new_session).pack(fill="x")
         row = ttk.Frame(sidebar, style="Side.TFrame")
         row.pack(fill="x", pady=(6, 0))
-        ttk.Button(row, text="重命名", style="Side.TButton", command=self.on_rename_session).pack(side="left")
-        ttk.Button(row, text="删除", style="Side.TButton", command=self.on_del_session).pack(side="right")
+        ttk.Button(row, text="重命名", width=6, style="Side.TButton", command=self.on_rename_session).pack(side="left")
+        ttk.Button(row, text="删除", width=5, style="Side.TButton", command=self.on_del_session).pack(side="right")
 
         ttk.Separator(sidebar).pack(fill="x", pady=22)
         ttk.Label(sidebar, text="语境与术语", style="Side.TLabel").pack(anchor="w")
@@ -1083,8 +1172,9 @@ class App(tk.Tk):
         heading = ttk.Frame(workspace)
         heading.pack(fill="x")
         ttk.Button(heading, text="打开悬浮窗", command=self.toggle_overlay).pack(side="right")
-        ttk.Label(heading, text="双向翻译", style="Title.TLabel").pack(side="left")
-        ttk.Label(workspace, text="两边各记各的话，延续各自的表达习惯。",
+        ttk.Button(heading, text="输入框翻译（试用）", command=self.translate_current_input).pack(side="right", padx=(0, 10))
+        ttk.Label(heading, text="开始对话", style="Title.TLabel").pack(side="left")
+        ttk.Label(workspace, text="记住你的表达，也读懂对方的话。选中消息，即可参考并查看译文。",
                   style="Hint.TLabel").pack(anchor="w", pady=(5, 20))
 
         controls = ttk.Frame(workspace)
@@ -1195,15 +1285,24 @@ class App(tk.Tk):
         except Exception:
             self._want_sash = None
         self._sash_tries = 0
-        self.bind("<Map>", lambda e: self.after(80, self._apply_sash), add="+")
+        self._sash_id = None
+        self._sash_restored = False
+        self.bind("<Map>", self._on_window_map, add="+")
+
+    def _on_window_map(self, event):
+        # Child controls also carry the toplevel's binding tag. Restore the
+        # initial divider once, not once per child or on every deiconify.
+        if event.widget is self and not self._sash_restored and self._sash_id is None:
+            self._sash_id = self.after_idle(self._apply_sash)
 
     def _apply_sash(self):
         """把分栏线放到保存的位置；窗口还没量好就再等一会儿。"""
+        self._sash_id = None
         w = self.paned.winfo_width()
         if w <= 50:
             self._sash_tries += 1
             if self._sash_tries < 25:
-                self.after(80, self._apply_sash)
+                self._sash_id = self.after(80, self._apply_sash)
             return
 
         # 两栏都留出容纳常用操作的宽度，其余位置回到正中间。
@@ -1213,7 +1312,9 @@ class App(tk.Tk):
         if want is None or want < lo or want > hi:
             want = w // 2
         try:
-            self.paned.sashpos(0, want)
+            if self.paned.sashpos(0) != want:
+                self.paned.sashpos(0, want)
+            self._sash_restored = True
         except Exception:
             pass
 
@@ -1284,8 +1385,8 @@ class App(tk.Tk):
         cfg = self.t.config
         mine = lang_name(cfg.get("myLang", "zh"))
         peer = lang_name(cfg.get("peerLang", "en"))
-        self.lane_mine.set_title("我  →  对方")
-        self.lane_peer.set_title("对方  →  我")
+        self.lane_mine.set_title("我想说")
+        self.lane_peer.set_title("对方说")
         self.lane_mine.set_pair("%s → %s" % (mine, peer))
         self.lane_peer.set_pair("%s → %s" % (peer, mine))
 
@@ -1314,7 +1415,7 @@ class App(tk.Tk):
         self.status("已切到会话「%s」" % self.t.active)
 
     def on_new_session(self):
-        name = simpledialog.askstring("新建会话", "会话名（一般写 Claude 那边的任务名）：",
+        name = ask_text("新建会话", "给这段对话起个名字，比如「和 Maya 聊设计」。",
                                       parent=self)
         if not name:
             return
@@ -1325,7 +1426,7 @@ class App(tk.Tk):
         self.status("已新建会话「%s」" % self.t.active, "ok")
 
     def on_rename_session(self):
-        new = simpledialog.askstring("重命名", "新名字：", initialvalue=self.t.active, parent=self)
+        new = ask_text("重命名", "换一个方便找到的名字。", initialvalue=self.t.active, parent=self)
         if not new:
             return
         self.t.rename_session(self.t.active, new.strip())
@@ -1472,22 +1573,49 @@ class App(tk.Tk):
             self.status("这一栏还没有内容")
             return
 
-        plan = self.t.plan(text, lane.side)
+        session=self.t.current_session()
+        client=Translator(config=copy.deepcopy(self.t.config),sessions=[copy.deepcopy(session)],active=session['name'])
+        plan = client.plan(text, lane.side)
+        self.clear_translation_context(lane.side)
         self.busy += 1
         lane.set_busy(True)
-        self.status("翻译中…（%s / 目标 %s / 记忆 %d 条 · 约 %d 字）"
+        if plan['backend']=='google':
+            self.status('翻译中…（免费机翻 / 目标 %s / 未带入上下文）'%lang_name(plan['target']))
+        else:self.status("翻译中…（%s / 目标 %s / 记忆 %d 条 · 约 %d 字）"
                     % (plan["backend"], lang_name(plan["target"]),
                        plan["ctx_count"], plan["ctx_chars"]))
 
         def worker():
             try:
-                r = self.t.translate(text, lane.side)
+                r = client.translate(text, lane.side,remember=False)
             except Exception as e:
-                self.after(0, lambda error=e: (self._finish(lane), self._on_fail(error, lane)))
+                self._translation_events.put((lane,session,text,None,e))
             else:
-                self.after(0, lambda: (self._finish(lane), self._on_done(lane, r)))
+                self._translation_events.put((lane,session,text,r,None))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _pump_translations(self):
+        while True:
+            try:lane,session,text,result,error=self._translation_events.get_nowait()
+            except queue.Empty:return
+            self._finish(lane)
+            if self.t.current_session() is not session:
+                self.status('会话已切换，未把旧请求的译文写入新会话。')
+                continue
+            if lane.get_input()!=text:
+                self.status('原文已修改，未覆盖这次编辑；请重新翻译。')
+                continue
+            if error is not None:
+                self._on_fail(error,lane)
+                continue
+            try:
+                self.t.remember_translation(text,result,session=session)
+            except Exception as failure:
+                self._on_fail(failure,lane)
+                continue
+            self.record_translation_context(result,session,text)
+            self._on_done(lane,result)
 
     def _on_done(self, lane, r):
         lane.set_output(r["text"])
@@ -1585,14 +1713,90 @@ class App(tk.Tk):
             except Exception:
                 pass
 
+    def record_translation_context(self,result,session,source,origin='main'):
+        if session is not self.t.current_session() or not result.get('context_usage'):return
+        record=dict(usage=copy.deepcopy(result['context_usage']),source=source,
+                    translation=result['text'],origin=origin)
+        side=result['lane'];self._context_records[side]=record
+        (self.lane_mine if side=='toPeer' else self.lane_peer).set_context_record(record)
+        if self.overlay is not None and self.overlay.side==side:
+            self.overlay.set_context_record(record)
+
+    def clear_translation_context(self,side):
+        self._context_records.pop(side,None)
+        lane=getattr(self,'lane_mine' if side=='toPeer' else 'lane_peer',None)
+        if lane is not None:lane.set_context_record(None)
+        overlay=getattr(self,'overlay',None)
+        if overlay is not None and overlay.side==side:overlay.set_context_record(None)
+        view=self.context_view
+        if view is not None and view.winfo_exists() and view.record['usage']['lane']==side:
+            view.destroy()
+
+    def open_translation_context(self,side,owner=None):
+        record=self._context_records.get(side)
+        if record is None:
+            self.status('先完成一次翻译，再查看它带入的消息。')
+            return
+        from context_view import ContextView
+        view=self.context_view
+        if view is not None and view.winfo_exists():
+            if view.record is record:
+                view.lift();return
+            view.destroy()
+        self.context_view=ContextView(self,record,owner)
+
     def open_settings(self):
         SettingsDialog(self)
 
+    def open_input_composer(self, target=None, reason=None):
+        if self.input_composer is None:
+            from input_composer import InputComposer
+            self.input_composer = InputComposer(self)
+        if target is None and reason is None:
+            from overlay import input_key_pair, key_name
+            reason = '先点目标输入框，再按 %s 唤起。' % key_name(*input_key_pair(self))
+        self.input_composer.show(target=target, reason=reason)
+
+    def translate_current_input(self, target=None, reason=None, selection=None):
+        if self.inline_input is None:
+            from input_inline import InlineInput
+            self.inline_input = InlineInput(self)
+        self.inline_input.start(target, reason, selection)
+
+    def apply_selection_button(self):
+        if self._closing:
+            return
+        if not self.t.config.get('selectionButton', True):
+            if self.selection_button is not None:
+                self.selection_button.stop()
+                self.selection_button = None
+            return
+        if self.selection_button is None:
+            try:
+                from selection_button import SelectionButton
+                self.selection_button = SelectionButton(self)
+            except (OSError, tk.TclError):
+                self.status('选区按钮暂未启动；可使用悬浮窗或输入框翻译。', 'bad')
+
+    def reference_peer_message(self, target, selection):
+        if self.peer_reference is None:
+            from peer_reference import PeerReference
+            self.peer_reference=PeerReference(self)
+        self.peer_reference.start(target,selection)
+
     def on_close(self):
         self._closing = True
+        if self.peer_reference is not None:
+            self.peer_reference.cancel()
+        if self.selection_button is not None:
+            self.selection_button.stop()
+        if self.inline_input is not None:
+            self.inline_input.cancel()
+        if self.input_composer is not None:
+            self.input_composer.cancel()
         self._update_cancel.set()
         # 关掉还没跑的定时器，否则销毁后回调触发会报 invalid command name
-        for attr in ("_pump_id", "_hk_id", "_warm_id", "_rec_id"):
+        for attr in ("_pump_id", "_hk_id", "_warm_id", "_rec_id", "_selection_id", "_sash_id"):
             try:
                 self.after_cancel(getattr(self, attr))
             except Exception:
@@ -1607,6 +1811,8 @@ class App(tk.Tk):
         try:
             if getattr(self, "hotkeys", None) is not None:
                 self.hotkeys.stop()
+                if self.hotkeys.poll_id is not None:
+                    self.after_cancel(self.hotkeys.poll_id)
         except Exception:
             pass
         try:
@@ -1629,6 +1835,10 @@ class App(tk.Tk):
 
 def main():
     import sys
+    global WINDOW_TITLE
+    if '--provider-probe' in sys.argv:
+        import provider_probe
+        sys.exit(provider_probe.main())
     # 打包后磁盘上既没有 python 可执行文件、也没有 asr_worker.py（它在 PYZ 里）——
     # 于是让【同一个 exe】用 --asr-worker 把自己当识别工作进程跑。
     # 必须在创建任何 GUI 之前判断，否则会先开出一个窗口。
@@ -1637,9 +1847,11 @@ def main():
         sys.argv = [a for a in sys.argv if a != "--asr-worker"]
         sys.exit(asr_worker.main())
 
-    from translator_core import log, use_user_data_dir
+    from translator_core import log, use_user_data_dir, is_sandboxed
     # 配置 / 会话放 %APPDATA%（装到 Program Files 也能写）；旁边有旧配置会自动复制过去
     use_user_data_dir()
+    if is_sandboxed():
+        WINDOW_TITLE += ' · 沙箱'
     log("--- start ---")
     if not single_instance_guard():
         log("another instance is running, focused it and exited")

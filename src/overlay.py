@@ -23,17 +23,20 @@ import threading
 import time
 import tkinter as tk
 from ctypes import wintypes
-from tkinter import ttk, simpledialog, messagebox
+from tkinter import ttk, messagebox
+from modern_dialogs import ask_text
 from island_window import (IslandWindow, ISLAND_BG, ISLAND_FIELD, ISLAND_TEXT,
                            ISLAND_MUTED, ISLAND_LINE, PILL_SIZE)
 
 from ui_kit import (C_BG, C_LINE, C_MINE, C_MUTED, C_OUT_BG, C_PEER,
-                    C_TEXT, C_SURFACE, FONT_UI, FONT_SMALL, FONT_HEAD,
+                    C_TEXT, C_SURFACE, FONT_UI, FONT_SMALL, FONT_HEAD, FONT_TEXT,
                     SPEAKER_H, SPEAKER_W, draw_level, norm_level, readonly_text, text_surface, brand_icon)
 
 FONT = FONT_UI
 FONT_S = FONT_SMALL
 FONT_B = FONT_HEAD
+from ui_kit import FONT_READING
+PANEL_BG, PANEL_FIELD, PANEL_TEXT, PANEL_MUTED, PANEL_LINE = C_BG, C_SURFACE, C_TEXT, C_MUTED, C_LINE
 
 ALPHAS = [1.0, 0.92, 0.85, 0.75]
 
@@ -59,6 +62,7 @@ HOTKEY_KEYS = ([(chr(c), c) for c in range(0x41, 0x5B)]        # A-Z
 # Win+Alt+* 相对干净：系统只占了 R / G / PrtScn / B / Enter。
 DEFAULT_TOGGLE = (MOD_WIN | MOD_ALT, 0x4F)   # Win+Alt+O  悬浮窗
 DEFAULT_CLIP = (MOD_WIN | MOD_ALT, 0x56)     # Win+Alt+V  翻剪贴板
+DEFAULT_INPUT = (MOD_WIN | MOD_ALT, 0x49)    # Win+Alt+I  翻译输入
 
 
 def key_name(mods, vk):
@@ -96,7 +100,9 @@ class HotkeyThread(threading.Thread):
         self.registered = {}
         self.failed = {}
         self._tid = None
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
+        self.poll_id = None
+        self.ready = threading.Event()
 
     # GetLastError 必须用 use_last_error=True 的句柄才取得准，
     # 默认的 ctypes.windll 不捕获 last error（之前在这上面栽过）。
@@ -116,14 +122,23 @@ class HotkeyThread(threading.Thread):
                                     "已被其它程序占用" if err == self.ERR_ALREADY
                                     else "注册失败(错误码 %s)" % err)
 
+        self.ready.set()
         u.GetMessageW.restype = ctypes.c_int
         msg = wintypes.MSG()
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             r = u.GetMessageW(ctypes.byref(msg), None, 0, 0)
             if r in (0, -1):
                 break
             if msg.message == WM_HOTKEY:
-                self.fired.put(int(msg.wParam))
+                hid = int(msg.wParam)
+                if hid == 3:
+                    from input_target import capture_target, TargetError
+                    try:
+                        self.fired.put((hid, capture_target(), None))
+                    except TargetError as error:
+                        self.fired.put((hid, None, str(error)))
+                else:
+                    self.fired.put(hid)
 
         for hid in self.registered:
             try:
@@ -132,7 +147,7 @@ class HotkeyThread(threading.Thread):
                 pass
 
     def stop(self):
-        self._stop.set()
+        self._stop_event.set()
         try:
             ctypes.windll.user32.PostThreadMessageW(self._tid, 0x0012, 0, 0)  # WM_QUIT
         except Exception:
@@ -176,10 +191,7 @@ class OverlayPanel(IslandWindow):
     # ── 外观 ──
 
     def _quiet_button(self, master, text, command, **kwargs):
-        return tk.Button(master, text=text, command=command, font=FONT_S,
-                         bg=ISLAND_BG, fg=ISLAND_MUTED, activebackground="#2c3440",
-                         activeforeground=ISLAND_TEXT, relief="flat", bd=0,
-                         padx=8, pady=7, cursor="hand2", **kwargs)
+        return ttk.Button(master, text=text, command=command, style='Quiet.TButton', **kwargs)
 
     def _build(self):
         self._pill = tk.Frame(self, bg=ISLAND_BG, takefocus=True, cursor="hand2")
@@ -198,29 +210,29 @@ class OverlayPanel(IslandWindow):
         self._pill.bind("<Return>", lambda e: self.expand(animate=False))
         self._pill.bind("<space>", lambda e: self.expand(animate=False))
 
-        self._panel = tk.Frame(self, bg=ISLAND_BG)
-        body = tk.Frame(self._panel, bg=ISLAND_BG)
+        self._panel = tk.Frame(self, bg=PANEL_BG)
+        body = tk.Frame(self._panel, bg=PANEL_BG)
         body.pack(fill="both", expand=True, padx=22, pady=18)
         body.columnconfigure(0, weight=1)
         body.rowconfigure(4, weight=1)
         body.rowconfigure(7, weight=1)
-        bar = tk.Frame(body, bg=ISLAND_BG)
+        bar = tk.Frame(body, bg=PANEL_BG)
         bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         self.btn_collapse = self._quiet_button(bar, "收起", self.close)
         self.btn_collapse.pack(side="right")
         self._quiet_button(bar, "主界面", self.open_main).pack(side="right")
         self._brand_icon = brand_icon(self, 24)
-        self.lbl_title = tk.Label(bar, text="假装外国人", bg=ISLAND_BG, fg=ISLAND_TEXT,
+        self.lbl_title = tk.Label(bar, text="假装外国人", bg=PANEL_BG, fg=PANEL_TEXT,
                                   image=self._brand_icon, compound="left", padx=5,
                                   font=FONT_B, anchor="w", cursor="fleur")
         self.lbl_title.pack(side="left", fill="x", expand=True)
         for widget in (bar, self.lbl_title):
             self.bind_drag(widget)
 
-        session = tk.Frame(body, bg=ISLAND_BG)
+        session = tk.Frame(body, bg=PANEL_BG)
         session.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-        self.btn_sess = tk.Menubutton(session, text="会话", bg=ISLAND_BG, fg=ISLAND_MUTED,
-                                      activebackground="#2c3440", activeforeground=ISLAND_TEXT,
+        self.btn_sess = tk.Menubutton(session, text="会话", bg=PANEL_BG, fg=PANEL_MUTED,
+                                      activebackground="#E7EDF6", activeforeground=PANEL_TEXT,
                                       font=FONT_S, relief="flat", padx=5, pady=5,
                                       cursor="hand2", indicatoron=False, bd=0,
                                       highlightthickness=0, anchor="w", takefocus=True)
@@ -228,47 +240,48 @@ class OverlayPanel(IslandWindow):
         self.menu_sess = tk.Menu(self.btn_sess, tearoff=0, font=FONT_S)
         self.btn_sess.configure(menu=self.menu_sess)
         tk.Label(session, text="两边各记各的话", font=FONT_S,
-                 bg=ISLAND_BG, fg=ISLAND_MUTED).pack(side="right")
+                 bg=PANEL_BG, fg=PANEL_MUTED).pack(side="right")
 
-        sw = tk.Frame(body, bg=ISLAND_FIELD, padx=3, pady=3)
+        sw = tk.Frame(body, bg=PANEL_FIELD, padx=3, pady=3)
         sw.grid(row=2, column=0, sticky="ew", pady=(0, 10))
-        self.btn_a = tk.Button(sw, text="我 → 对方", font=FONT_S, relief="flat", bd=0,
-                               padx=12, pady=8, cursor="hand2", command=lambda: self.set_side("toPeer"))
+        self.btn_a = ttk.Button(sw, text="我想说", command=lambda: self.set_side("toPeer"))
         self.btn_a.pack(side="left", fill="x", expand=True)
-        self.btn_b = tk.Button(sw, text="对方 → 我", font=FONT_S, relief="flat", bd=0,
-                               padx=12, pady=8, cursor="hand2", command=lambda: self.set_side("fromPeer"))
+        self.btn_b = ttk.Button(sw, text="对方说", command=lambda: self.set_side("fromPeer"))
         self.btn_b.pack(side="left", fill="x", expand=True, padx=(3, 0))
 
-        input_head = tk.Frame(body, bg=ISLAND_BG)
+        input_head = tk.Frame(body, bg=PANEL_BG)
         input_head.grid(row=3, column=0, sticky="ew", pady=(0, 6))
         self.lbl_input = tk.Label(input_head, text="你的原话", font=FONT_S,
-                                  bg=ISLAND_BG, fg=ISLAND_MUTED)
+                                  bg=PANEL_BG, fg=PANEL_MUTED)
         self.lbl_input.pack(side="left")
         self.btn_clip = self._quiet_button(input_head, "翻译剪贴板", self.translate_clipboard)
         self.btn_clip.pack(side="right")
 
-        self.lbl_hint = tk.Label(body, text="Ctrl+Enter 翻译", bg=ISLAND_BG, fg=ISLAND_MUTED,
+        self.lbl_hint = tk.Label(body, text="Ctrl+Enter 翻译", bg=PANEL_BG, fg=PANEL_MUTED,
                                  font=FONT_S, anchor="w", wraplength=374, justify="left")
         self.lbl_hint.grid(row=8, column=0, sticky="ew", pady=(8, 0))
+        self.btn_context=ttk.Button(body,style='PanelContext.TButton',
+            command=lambda:self.app.open_translation_context(self.side,owner=self))
         output_surface, self.txt_out = self._text_area(body, undo=False)
+        self.txt_out.configure(font=FONT_READING)
         output_surface.grid(row=7, column=0, sticky="nsew")
         readonly_text(self.txt_out)
-        out_head = tk.Frame(body, bg=ISLAND_BG)
+        out_head = tk.Frame(body, bg=PANEL_BG)
         out_head.grid(row=6, column=0, sticky="ew", pady=(6, 6))
         self.lbl_output = tk.Label(out_head, text="发给对方", font=FONT_S,
-                                   bg=ISLAND_BG, fg=ISLAND_MUTED)
+                                   bg=PANEL_BG, fg=PANEL_MUTED)
         self.lbl_output.pack(side="left")
         self.btn_copy = self._quiet_button(out_head, "复制译文", self.copy_out)
         self.btn_copy.pack(side="right")
 
-        rb = tk.Frame(body, bg=ISLAND_BG)
+        rb = tk.Frame(body, bg=PANEL_BG)
         rb.grid(row=5, column=0, sticky="ew", pady=(12, 0))
         self.btn_go = ttk.Button(rb, text="翻译", style="Go.TButton", width=6, command=self.do_translate)
         self.btn_go.pack(side="left")
         self.btn_mic = self._quiet_button(rb, "语音输入", self.toggle_voice)
         self.btn_mic.pack(side="left", padx=(8, 0))
         self.lvl = tk.Canvas(rb, width=SPEAKER_W, height=SPEAKER_H,
-                             highlightthickness=0, bd=0, bg=ISLAND_BG)
+                             highlightthickness=0, bd=0, bg=PANEL_BG)
         draw_level(self.lvl, 0.0, C_MINE)
         input_surface, self.txt_in = self._text_area(body, undo=True)
         input_surface.grid(row=4, column=0, sticky="nsew")
@@ -279,17 +292,11 @@ class OverlayPanel(IslandWindow):
         self.refresh_session_label()
 
     def _text_area(self, master, undo):
-        frame, widget = text_surface(master, height=4, font=FONT, undo=undo,
-                                     bg=ISLAND_FIELD, fg=ISLAND_TEXT,
-                                     insertbackground=ISLAND_TEXT, selectforeground="white")
-        frame.configure(highlightbackground=ISLAND_LINE)
-        widget.bind("<FocusOut>", lambda e: frame.configure(highlightbackground=ISLAND_LINE), add="+")
-        style = ttk.Style(self)
-        style.configure("Island.Vertical.TScrollbar", background="#3a4555", troughcolor=ISLAND_FIELD,
-                        arrowcolor=ISLAND_MUTED, borderwidth=0)
-        for child in frame.winfo_children():
-            if isinstance(child, ttk.Scrollbar):
-                child.configure(style="Island.Vertical.TScrollbar")
+        frame, widget = text_surface(master, height=4, font=FONT_TEXT, undo=undo,
+                                     bg=PANEL_FIELD, fg=PANEL_TEXT,
+                                     insertbackground=PANEL_TEXT, selectforeground=C_TEXT)
+        frame.configure(highlightbackground=PANEL_LINE)
+        widget.bind("<FocusOut>", lambda e: frame.configure(highlightbackground=PANEL_LINE), add="+")
         return frame, widget
 
     def _restore_pos(self):
@@ -401,7 +408,7 @@ class OverlayPanel(IslandWindow):
         self.flash("已切到 %s" % name)
 
     def new_session(self):
-        name = simpledialog.askstring("新建会话", "会话名（一般写 Claude / GPT 那边的任务名）：",
+        name = ask_text("新建会话", "给这段对话起个名字，比如「和 Maya 聊设计」。",
                                       parent=self)
         if not name:
             return
@@ -414,7 +421,7 @@ class OverlayPanel(IslandWindow):
 
     def rename_session(self):
         old = self.t.active
-        new = simpledialog.askstring("重命名", "新名字：", initialvalue=old, parent=self)
+        new = ask_text("重命名", "换一个方便找到的名字。", initialvalue=old, parent=self)
         if not new:
             return
         self.t.rename_session(old, new.strip())
@@ -441,13 +448,18 @@ class OverlayPanel(IslandWindow):
         self.update_side_buttons()
         self.refresh_memory()
 
+    def set_context_record(self,record):
+        if record is None:self.btn_context.grid_remove()
+        else:
+            from context_view import usage_summary
+            self.btn_context.configure(text=usage_summary(record))
+            self.btn_context.grid(row=9,column=0,sticky='w',pady=(6,0))
+
     def update_side_buttons(self):
         for btn, sd, col in ((self.btn_a, "toPeer", C_MINE),
                              (self.btn_b, "fromPeer", C_PEER)):
             on = (self.side == sd)
-            btn.configure(bg=col if on else ISLAND_FIELD,
-                          fg="white" if on else ISLAND_MUTED,
-                          activebackground=col, activeforeground="white")
+            btn.configure(style=("Go.TButton" if sd == "toPeer" else "PeerGo.TButton") if on else "Quiet.TButton")
         self.btn_go.configure(style="PeerGo.TButton" if self.side == "fromPeer" else "Go.TButton")
         self.lbl_input.configure(text="对方的原文" if self.side == "fromPeer" else "你的原话")
         self.lbl_output.configure(text="对方的意思" if self.side == "fromPeer" else "发给对方")
@@ -513,6 +525,7 @@ class OverlayPanel(IslandWindow):
         self.lbl_input.configure(text="%s · 记忆 %d 条" % (
             "对方的原文" if self.side == "fromPeer" else "你的原话", n))
         self.refresh_session_label()
+        self.set_context_record(self.app._context_records.get(self.side))
 
     def accent(self):
         return C_PEER if self.side == "fromPeer" else C_MINE
@@ -564,7 +577,7 @@ class OverlayPanel(IslandWindow):
 
 # ───────────────────────── 接线 ─────────────────────────
 
-def install_hotkeys(app, toggle_hotkey=True, clip_hotkey=True):
+def install_hotkeys(app, toggle_hotkey=True, clip_hotkey=True, input_hotkey=True):
     """给主窗口装上全局快捷键，键位从 config 读，方便改。
 
     config["hotkeyToggle"] / ["hotkeyClipboard"] 的格式是 [修饰键, 虚拟键码]。
@@ -573,29 +586,38 @@ def install_hotkeys(app, toggle_hotkey=True, clip_hotkey=True):
     cfg = app.t.config
     t_mods, t_vk = cfg.get("hotkeyToggle") or DEFAULT_TOGGLE
     c_mods, c_vk = cfg.get("hotkeyClipboard") or DEFAULT_CLIP
+    i_mods, i_vk = input_key_pair(app)
 
     keys = {}
     if toggle_hotkey:
         keys[1] = (t_mods, t_vk, "%s 悬浮窗" % key_name(t_mods, t_vk))
     if clip_hotkey:
         keys[2] = (c_mods, c_vk, "%s 翻剪贴板" % key_name(c_mods, c_vk))
+    if input_hotkey:
+        keys[3] = (i_mods, i_vk, "%s 原输入框翻译" % key_name(i_mods, i_vk))
 
     th = HotkeyThread(keys)
     th.start()
+    th.ready.wait(.5)
 
     def poll():
+        if th._stop_event.is_set() or getattr(app, '_closing', False):
+            return
         try:
             while True:
-                hid = th.fired.get_nowait()
+                item = th.fired.get_nowait()
+                hid = item[0] if isinstance(item, tuple) else item
                 if hid == 1:
                     app.toggle_overlay()
                 elif hid == 2:
                     app.overlay_clipboard()
+                elif hid == 3:
+                    app.translate_current_input(target=item[1], reason=item[2])
         except queue.Empty:
             pass
-        app.after(120, poll)
+        th.poll_id = app.after(120, poll)
 
-    app.after(200, poll)
+    th.poll_id = app.after(200, poll)
     return th
 
 
@@ -616,18 +638,22 @@ def toggle_key_name(app):
     return key_name(*hotkey_pair(app)[0])
 
 
+def input_key_pair(app):
+    return app.t.config.get('hotkeyInput') or DEFAULT_INPUT
+
+
 def hotkey_help(app):
     """给设置界面显示用：当前键位 + 能不能用。"""
     (t_mods, t_vk), (c_mods, c_vk) = hotkey_pair(app)
-    return ("%s  显示/隐藏悬浮窗\n%s  翻译剪贴板"
-            % (key_name(t_mods, t_vk), key_name(c_mods, c_vk)))
+    return ("%s  显示/隐藏悬浮窗\n%s  翻译剪贴板\n%s  原输入框翻译"
+            % (key_name(t_mods, t_vk), key_name(c_mods, c_vk), key_name(*input_key_pair(app))))
 
 
 def hotkey_line(app):
     """状态栏用的一行键位说明。"""
     (t_mods, t_vk), (c_mods, c_vk) = hotkey_pair(app)
-    return ("%s 悬浮窗 · %s 翻剪贴板"
-            % (key_name(t_mods, t_vk), key_name(c_mods, c_vk)))
+    return ("%s 悬浮窗 · %s 翻剪贴板 · %s 原输入框翻译"
+            % (key_name(t_mods, t_vk), key_name(c_mods, c_vk), key_name(*input_key_pair(app))))
 
 
 # ───────────────────────── 改键位 ─────────────────────────
@@ -666,6 +692,9 @@ def apply_hotkeys(app):
     if old is not None:
         try:
             old.stop()
+            if old.poll_id is not None:
+                app.after_cancel(old.poll_id)
+            old.join(timeout=.5)
         except Exception:
             pass
         time.sleep(0.25)     # 等旧线程把键注销掉，否则同一个键会注册失败

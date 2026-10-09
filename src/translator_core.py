@@ -21,6 +21,7 @@ translator_core.py  —  假装外国人翻译器的后端
 """
 
 import ctypes
+import copy
 import json
 import os
 import re
@@ -54,7 +55,7 @@ BUILTIN_BASE = "https://api.deepseek.com"
 BUILTIN_MODEL = "deepseek-chat"
 
 # 本程序版本。**改版本时这里和 installer.iss 的 AppVer 要一起改。**
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 REPO_SLUG = "NeoHotaru/pretend-foreigner-translator"
 
 
@@ -597,6 +598,7 @@ DEFAULT_CONFIG = {
     "asrDevice": None,          # 麦克风编号，None = 系统默认
     "asrWarmup": True,          # 启动后在后台预加载识别模型
     "globalHotkeys": True,      # 全局快捷键开关
+    "selectionButton": True,   # 可编辑选区旁显示「假装翻译」按钮
     "overlayAlpha": 1.0,        # 悬浮窗透明度
     "overlaySide": "toPeer",    # 悬浮窗上次用的方向
     "overlayPos": None,         # 悬浮窗上次的位置 [x, y]
@@ -992,18 +994,27 @@ class Translator:
 
         sess = self.current_session()
         history, chars = pick_context(sess.get(lane, []), depth, budget)
+        history = copy.deepcopy(history)
 
         # 对方最近几条：风格不参与，只为解开"我在回应什么"
         other = "fromPeer" if lane == "toPeer" else "toPeer"
         cross_depth = clamp_depth(self.config.get("crossMemoryDepth", 2), 2)
         cross, cross_chars = pick_context(sess.get(other, []), cross_depth, budget)
+        cross = copy.deepcopy(cross)
+        backend = self.active_backend()
+        note = self.note()
+        uses_context=backend!='google'
+        usage = dict(session=sess['name'], lane=lane, backend=backend,
+                     own=history if uses_context else [], cross=cross if uses_context else [],
+                     note=note if uses_context else '', cross_depth=cross_depth)
 
         return {
-            "backend": self.active_backend(),
+            "backend": backend,
             "lane": lane,
             "target": target,
             "mode": mode,
-            "system_prompt": build_system_prompt(target, mode, history, self.note(), cross),
+            "system_prompt": build_system_prompt(target, mode, history, note, cross),
+            "context_usage": usage,
             "context": history,
             "ctx_count": len(history),
             "ctx_chars": chars,
@@ -1024,6 +1035,7 @@ class Translator:
             backend, lane, elapsed          元信息
             ctx_count, ctx_chars            这次带了多少记忆
             memory_count                    本栏翻完之后的总条数
+            context_usage                   本次实际带入的消息与术语快照（不含凭据）
         """
         text = (text or "").strip()
         if not text:
@@ -1050,12 +1062,7 @@ class Translator:
             raise ApiError("没返回内容")
 
         if remember:
-            arr = self.current_session().setdefault(lane, [])
-            arr.append({"src": text, "out": r["text"],
-                        "srcLang": r["source"], "tgtLang": r["target"]})
-            if len(arr) > MEM_MAX:
-                del arr[:-MEM_MAX]
-            self.save_sessions()
+            self.remember_translation(text, dict(r, lane=lane))
 
         return {
             "text": r["text"],
@@ -1065,12 +1072,54 @@ class Translator:
             "backend": p["backend"],
             "lane": lane,
             "elapsed": elapsed,
-            "ctx_count": p["ctx_count"],
-            "ctx_chars": p["ctx_chars"],
-            "cross_count": p["cross_count"],
-            "cross_chars": p["cross_chars"],
+            "ctx_count": len(p["context_usage"]["own"]),
+            "ctx_chars": p["ctx_chars"] if p['backend']!='google' else 0,
+            "cross_count": len(p["context_usage"]["cross"]),
+            "cross_chars": p["cross_chars"] if p['backend']!='google' else 0,
+            "context_usage": p["context_usage"],
             "memory_count": len(self.current_session().get(lane, [])),
         }
+
+    def remember_translation(self, text, result, session=None):
+        """确认使用预览译文后再记忆；可限定它所属的原会话。"""
+        if session is not None and session is not self.current_session():
+            raise ApiError("会话已切换，请重新翻译")
+        lane = result.get("lane")
+        if lane not in ("toPeer", "fromPeer") or not text.strip() or not result.get("text"):
+            raise ApiError("没有有效译文可记忆")
+        arr = self.current_session().setdefault(lane, [])
+        arr.append({"src": text, "out": result["text"],
+                    "srcLang": result["source"], "tgtLang": result["target"]})
+        if len(arr) > MEM_MAX:
+            del arr[:-MEM_MAX]
+        return self.save_sessions()
+
+    def remember_peer_reference(self, text, session=None):
+        """用户确认的对方原话先进入参考；译文可稍后补齐。"""
+        if session is not None and session is not self.current_session():
+            raise ApiError("会话已切换，请重新选择参考消息")
+        text = (text or '').strip()
+        if not text:
+            raise ApiError("没有选中对方消息")
+        arr = self.current_session().setdefault('fromPeer', [])
+        if arr and arr[-1].get('src') == text:
+            return arr[-1], self.save_sessions()
+        entry = dict(src=text, out='', srcLang='?', tgtLang=self.config.get('myLang','zh'), referenceOnly=True)
+        arr.append(entry)
+        if len(arr)>MEM_MAX:
+            del arr[:-MEM_MAX]
+        return entry, self.save_sessions()
+
+    def complete_peer_reference(self, entry, result, session=None):
+        if session is not None and session is not self.current_session():
+            raise ApiError("会话已切换，译文未写入其它会话")
+        if not any(item is entry for item in self.current_session().get('fromPeer',[])):
+            raise ApiError("参考消息已移除，未重新加入")
+        if result.get('lane')!='fromPeer' or not result.get('text'):
+            raise ApiError("没有有效的对方消息译文")
+        entry.update(out=result['text'], srcLang=result['source'], tgtLang=result['target'])
+        entry.pop('referenceOnly',None)
+        return self.save_sessions()
 
     # ── 服务商工具（给设置界面用）──
 

@@ -11,24 +11,57 @@ import sys
 from pathlib import Path
 
 # 主色（跟主窗口保持一致）
-C_BG = "#f5f7fa"
-C_LINE = "#dde4eb"
-C_MINE = "#2459a6"      # 我 → 对方
-C_PEER = "#08796d"      # 对方 → 我
-C_OUT_BG = "#f3f7fb"
-C_MUTED = "#596b7d"
-C_TEXT = "#203247"
+C_BG = "#F6F7F9"
+C_LINE = "#E3E8EF"
+C_MINE = "#315FCC"      # 我 → 对方
+C_PEER = "#177C70"      # 对方 → 我
+C_OUT_BG = "#F6F8FC"
+C_MUTED = "#606E81"
+C_TEXT = "#202A38"
 C_SURFACE = "#ffffff"
-C_SIDEBAR = "#edf2f7"
+C_SIDEBAR = "#EFF2F6"
 
 # Windows 原生中英文字体，字号以 point 计，跟随系统 DPI。
-FONT_UI = ("Microsoft YaHei UI", 10)
-FONT_SMALL = ("Microsoft YaHei UI", 9)
-FONT_HEAD = ("Microsoft YaHei UI", 13, "bold")
-FONT_TEXT = ("Microsoft YaHei UI", 12)
-FONT_TITLE = ("Microsoft YaHei UI", 21, "bold")
+FONT_UI = "PftUI"
+FONT_SMALL = "PftSmall"
+FONT_HEAD = "PftHead"
+FONT_TEXT = "PftText"
+FONT_TITLE = "PftTitle"
+FONT_READING = "PftReading"
 C_OK = "#15803d"        # 成功/可用
 C_BAD = "#b91c1c"       # 失败/不可用
+
+
+def configure_fonts(root):
+    """Resolve local fonts once per Tcl interpreter, including Chinese fallbacks."""
+    from tkinter import font
+    if hasattr(root, '_pft_fonts'):
+        return
+    families = set(font.families(root))
+    family = next((f for f in ('MiSans', 'MiSans Regular', 'Noto Sans SC',
+                               'Microsoft YaHei UI') if f in families), 'Segoe UI')
+    root._pft_fonts = {}
+    for name, size, weight in [('PftUI', 11, 'normal'), ('PftSmall', 9, 'normal'),
+                               ('PftHead', 14, 'bold'), ('PftText', 12, 'normal'),
+                               ('PftTitle', 24, 'bold'), ('PftReading', 15, 'normal')]:
+        root._pft_fonts[name] = font.Font(root=root, name=name, family=family,
+                                        size=size, weight=weight)
+    # Let ttk styles choose heading sizes; a global *Font option overrides them.
+    for name in ('TkDefaultFont', 'TkTextFont', 'TkMenuFont'):
+        font.nametofont(name, root=root).configure(family=family, size=11)
+
+
+def auto_scrollbar(master, command):
+    """Native draggable scrollbar, present only when content overflows."""
+    from tkinter import ttk
+    class AutoScrollbar(ttk.Scrollbar):
+        def set(self, first, last):
+            if float(first) <= 0 and float(last) >= 1:
+                self.grid_remove()
+            else:
+                self.grid()
+            super().set(first, last)
+    return AutoScrollbar(master, orient='vertical', command=command, takefocus=False)
 
 
 def asset_path(name):
@@ -44,10 +77,24 @@ def brand_icon(master, size=32):
 
 def apply_app_icon(root):
     """设置主窗口及后续子窗口默认图标，保留 Tk 图像引用。"""
+    import tkinter as tk
+
     root._app_icon_images = [brand_icon(root, size) for size in (32, 64)]
     root.iconphoto(True, *root._app_icon_images)
     if sys.platform == "win32":
-        root.iconbitmap(default=str(asset_path("app-icon.ico")))
+        icon = str(asset_path("app-icon.ico"))
+        # Tk 的 -default 设置不会为当前 HWND 写入 WM_SETICON；
+        # Windows 标题栏需要显式设置当前窗口，再覆盖后续映射的子窗口。
+        root.iconbitmap(icon)
+
+        def on_window_map(event):
+            if isinstance(event.widget, (tk.Tk, tk.Toplevel)):
+                try:
+                    event.widget.iconbitmap(icon)
+                except tk.TclError:
+                    pass  # 窗口可能在排队的 Map 事件处理前已关闭。
+
+        root.bind_all("<Map>", on_window_map, add="+")
 
 
 def text_surface(master, text_class=None, **kwargs):
@@ -56,19 +103,37 @@ def text_surface(master, text_class=None, **kwargs):
     from tkinter import ttk
 
     bg = kwargs.get("bg", C_SURFACE)
-    frame = tk.Frame(master, bg=bg, highlightthickness=1,
-                     highlightbackground=C_LINE, bd=0)
+    class RoundedTextSurface(ttk.Frame):
+        def configure(self, cnf=None, **options):
+            options = dict(cnf or {}, **options)
+            color = options.pop('highlightbackground', None)
+            if color is not None:
+                options['style'] = self._base_style + ('.Focus' if color == C_MINE else '') + '.TFrame'
+            return super().configure(**options)
+    if bg in (C_SURFACE, C_OUT_BG):
+        frame = RoundedTextSurface(master, padding=7)
+        frame._base_style = 'ReadingSurface' if bg == C_OUT_BG else 'TextSurface'
+        try:
+            parent_bg = master.cget('background')
+        except tk.TclError:
+            parent_bg = ttk.Style(master).lookup(master.cget('style') or master.winfo_class(), 'background')
+        if parent_bg == C_BG:
+            frame._base_style = 'Panel.' + frame._base_style
+        frame.configure(style=frame._base_style+'.TFrame')
+    else:
+        frame = tk.Frame(master, bg=bg, highlightthickness=1,
+                         highlightbackground=C_LINE, bd=0)
     frame.rowconfigure(0, weight=1)
     frame.columnconfigure(0, weight=1)
     defaults = dict(wrap="word", font=FONT_TEXT, fg=C_TEXT, bg=bg,
                     relief="flat", borderwidth=0, highlightthickness=0,
-                    padx=14, pady=12, spacing1=2, spacing3=5,
+                    padx=10, pady=7, spacing1=2, spacing3=5,
                     insertbackground=C_MINE, selectbackground="#cfe1f5",
                     selectforeground=C_TEXT, width=1)
     defaults.update(kwargs)
     widget = (text_class or tk.Text)(frame, **defaults)
     widget.grid(row=0, column=0, sticky="nsew")
-    scroll = ttk.Scrollbar(frame, orient="vertical", command=widget.yview, takefocus=False)
+    scroll = auto_scrollbar(frame, widget.yview)
     scroll.grid(row=0, column=1, sticky="ns", padx=(0, 3), pady=4)
     widget.configure(yscrollcommand=scroll.set)
     widget.bind("<FocusIn>", lambda e: frame.configure(

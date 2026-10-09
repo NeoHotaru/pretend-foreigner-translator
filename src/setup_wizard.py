@@ -20,11 +20,11 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from translator_core import ApiError, Translator, list_models
-from ui_kit import C_BG, C_LINE, C_MINE, C_MUTED, C_OK
+from ui_kit import C_BG, C_LINE, C_MINE, C_MUTED, C_OK, C_TEXT, FONT_UI, FONT_SMALL, FONT_HEAD
 
-FONT = ("Microsoft YaHei UI", 10)
-FONT_S = ("Microsoft YaHei UI", 9)
-FONT_B = ("Microsoft YaHei UI", 12, "bold")
+FONT = FONT_UI
+FONT_S = FONT_SMALL
+FONT_B = FONT_HEAD
 
 # 常见服务商预设：填好 Base URL，用户只要贴 key
 PRESETS = [
@@ -85,12 +85,12 @@ class SetupWizard(tk.Toplevel):
     # ── 界面 ──
 
     def _build(self):
-        head = tk.Frame(self, bg=C_MINE)
+        head = tk.Frame(self, bg=C_BG)
         head.pack(fill="x")
-        tk.Label(head, text="先定一件事：用哪个翻译引擎", bg=C_MINE, fg="white",
-                 font=FONT_B, anchor="w", padx=14, pady=10).pack(fill="x")
+        tk.Label(head, text="欢迎，先选一个翻译引擎", bg=C_BG, fg=C_TEXT,
+                 font=FONT_B, anchor="w", padx=24, pady=20).pack(fill="x")
 
-        body = ttk.Frame(self, padding=14)
+        body = ttk.Frame(self, padding=(24,0,24,24))
         body.pack(fill="both", expand=True)
 
         ttk.Label(body, foreground=C_MUTED, font=FONT_S, justify="left",
@@ -99,25 +99,19 @@ class SetupWizard(tk.Toplevel):
                   ).pack(anchor="w", pady=(0, 12))
 
         # ── 选项一：免费机翻 ──
-        f1 = tk.Frame(body, bg="#ffffff", highlightthickness=1,
-                      highlightbackground=C_LINE)
+        f1 = ttk.Frame(body, style='Lane.TFrame', padding=12)
         f1.pack(fill="x")
-        tk.Radiobutton(f1, text="免费机翻", variable=self.v_choice, value="google",
-                       bg="#ffffff", font=FONT, activebackground="#ffffff",
-                       command=self._sync, padx=8, pady=6, anchor="w"
-                       ).pack(fill="x")
+        ttk.Radiobutton(f1, text="免费机翻", variable=self.v_choice, value="google",
+                        style='Card.TRadiobutton', command=self._sync).pack(fill="x",padx=12,pady=8)
         self.lbl_free = tk.Label(f1, text=FREE_TEXT, bg="#ffffff", fg=C_MUTED,
                                  font=FONT_S, justify="left", anchor="w", padx=34)
         self.lbl_free.pack(fill="x", pady=(0, 6))
 
         # ── 选项二：自己的 key ──
-        f2 = tk.Frame(body, bg="#ffffff", highlightthickness=1,
-                      highlightbackground=C_LINE)
+        f2 = ttk.Frame(body, style='Lane.TFrame', padding=12)
         f2.pack(fill="x", pady=(10, 0))
-        tk.Radiobutton(f2, text="用我自己的 API Key", variable=self.v_choice,
-                       value="key", bg="#ffffff", font=FONT,
-                       activebackground="#ffffff", command=self._sync,
-                       padx=8, pady=6, anchor="w").pack(fill="x")
+        ttk.Radiobutton(f2, text="用我自己的 API Key", variable=self.v_choice,
+                        value="key", style='Card.TRadiobutton',command=self._sync).pack(fill="x",padx=12,pady=8)
         tk.Label(f2, text=KEY_TEXT, bg="#ffffff", fg=C_MUTED, font=FONT_S,
                  justify="left", anchor="w", padx=34).pack(fill="x")
 
@@ -175,7 +169,7 @@ class SetupWizard(tk.Toplevel):
         bar = ttk.Frame(body)
         bar.pack(fill="x", pady=(10, 0))
         ttk.Button(bar, text="退出", width=10, command=self.on_quit).pack(side="right")
-        self.btn_go = ttk.Button(bar, text="开始使用", width=14, command=self.on_ok)
+        self.btn_go = ttk.Button(bar, text="开始使用", style='Go.TButton', width=14, command=self.on_ok)
         self.btn_go.pack(side="right", padx=8)
 
         self._on_preset()
@@ -203,7 +197,7 @@ class SetupWizard(tk.Toplevel):
                         sub.configure(state=("disabled" if free else "normal"))
                     except Exception:
                         pass
-        self.lbl_free.configure(fg=(C_OK if free else C_MUTED))
+        self.lbl_free.configure(fg=(C_TEXT if free else C_MUTED))
 
     def _on_preset(self, _e=None):
         i = self.cb_preset.current()

@@ -41,3 +41,4 @@ artifacts/**/selftest-result.txt
 artifacts/**/*.png
 artifacts/release-*/
 artifacts/update-refresh/
+artifacts/input-preview/

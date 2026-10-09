@@ -3,7 +3,7 @@
 
 #define AppName        "假装外国人翻译器"
 #define AppNameEn      "Pretend Foreigner Translator"
-#define AppVer         "1.1.1"
+#define AppVer         "1.1.2"
 #define AppPublisher   "NeoHotaru"
 #define AppURL         "https://github.com/NeoHotaru"
 #ifndef SrcDir
@@ -45,9 +45,9 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Source: "{#SrcDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\pretend-foreigner.exe"
+Name: "{group}\{#AppName}"; Filename: "{app}\pretend-foreigner.exe"; IconFilename: "{app}\_internal\assets\app-icon.ico"; IconIndex: 0
 Name: "{group}\Uninstall {#AppNameEn}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\pretend-foreigner.exe"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\pretend-foreigner.exe"; IconFilename: "{app}\_internal\assets\app-icon.ico"; IconIndex: 0; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\pretend-foreigner.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
